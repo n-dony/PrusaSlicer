@@ -39,6 +39,7 @@ float Flow::auto_extrusion_width(FlowRole role, float nozzle_diameter)
         return nozzle_diameter;
     default:
     case frExternalPerimeter:
+    case frFirstInternalPerimeter:
     case frPerimeter:
     case frSolidInfill:
     case frInfill:
@@ -56,6 +57,8 @@ static inline FlowRole opt_key_to_flow_role(const std::string &opt_key)
         return frPerimeter;
     else if (opt_key == "external_perimeter_extrusion_width")
         return frExternalPerimeter;
+    //else if (opt_key == "first_internal_perimeter_extrusion_width")
+      //  return frFirstInternalPerimeter;
     else if (opt_key == "infill_extrusion_width")
         return frInfill;
     else if (opt_key == "solid_infill_extrusion_width")

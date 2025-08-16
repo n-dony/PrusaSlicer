@@ -203,6 +203,7 @@ struct ExtrusionLine
     double area() const;
 
     bool is_external_perimeter() const { return this->inset_idx == 0; }
+    bool is_first_internal_perimeter() const { return this->inset_idx == 1; }
 };
 
 static inline Slic3r::ThickPolyline to_thick_polyline(const Arachne::ExtrusionLine &line_junctions)

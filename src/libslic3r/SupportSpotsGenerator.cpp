@@ -275,6 +275,7 @@ float get_flow_width(const LayerRegion *region, ExtrusionRole role)
 {
     if (role == ExtrusionRole::BridgeInfill) return region->flow(FlowRole::frExternalPerimeter).width();
     if (role == ExtrusionRole::ExternalPerimeter) return region->flow(FlowRole::frExternalPerimeter).width();
+    if (role == ExtrusionRole::FirstInternalPerimeter) return region->flow(FlowRole::frFirstInternalPerimeter).width();
     if (role == ExtrusionRole::GapFill) return region->flow(FlowRole::frInfill).width();
     if (role == ExtrusionRole::Perimeter) return region->flow(FlowRole::frPerimeter).width();
     if (role == ExtrusionRole::SolidInfill) return region->flow(FlowRole::frSolidInfill).width();

@@ -1086,6 +1086,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
         for (size_t region_id = 0; region_id < print.num_print_regions(); ++ region_id) {
             const PrintRegion &region = print.get_print_region(region_id);
             file.write_format("; external perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frExternalPerimeter, layer_height).width());
+            file.write_format("; first internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frFirstInternalPerimeter, layer_height).width());
             file.write_format("; perimeters extrusion width = %.2fmm\n",          region.flow(*first_object, frPerimeter,         layer_height).width());
             file.write_format("; infill extrusion width = %.2fmm\n",              region.flow(*first_object, frInfill,            layer_height).width());
             file.write_format("; solid infill extrusion width = %.2fmm\n",        region.flow(*first_object, frSolidInfill,       layer_height).width());
@@ -3430,6 +3431,8 @@ std::string GCodeGenerator::_extrude(
             speed = m_config.get_abs_value("perimeter_speed");
         } else if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             speed = m_config.get_abs_value("external_perimeter_speed");
+        } else if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            speed = m_config.get_abs_value("first_internal_perimeter_speed");
         } else if (path_attr.role.is_bridge()) {
             assert(path_attr.role.is_perimeter() || path_attr.role == ExtrusionRole::BridgeInfill);
             speed = m_config.get_abs_value("bridge_speed");
@@ -3541,6 +3544,9 @@ std::string GCodeGenerator::_extrude(
 
         if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             cooling_marker_setspeed_comments += ";_EXTERNAL_PERIMETER";
+        }
+        if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            cooling_marker_setspeed_comments += ";_FIRST_INTERNAL_PERIMETER";
         }
     }
 

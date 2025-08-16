@@ -50,6 +50,7 @@ struct Settings
 				true, // None
 				true, // Perimeter
 				true, // ExternalPerimeter
+				true, // FirstInternalPerimeter
 				true, // OverhangPerimeter
 				true, // InternalInfill
                 true, // SolidInfill

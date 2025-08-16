@@ -40,11 +40,12 @@ struct PerimeterExtrusion
 
     // Returns if ExtrusionLine is an external or an internal perimeter.
     bool is_external_perimeter() const { return extrusion.is_external_perimeter(); }
+    bool is_first_internal_perimeter() const { return extrusion.is_first_internal_perimeter(); }
 };
 
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
 
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first);
+PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first,  bool swap_first_int_w_ext_perimeter,  bool reverse_internal_perimeters, int reverse_internal_perimeters_at);
 
 } // namespace Slic3r::Arachne::PerimeterOrder
 

@@ -1477,6 +1477,10 @@ void TabPrint::build()
         optgroup->append_single_option_line("scarf_seam_max_segment_length", scarf_seam_path + "max-scarf-joint-segment-length");
         optgroup->append_single_option_line("scarf_seam_on_inner_perimeters", scarf_seam_path + "scarf-joint-on-inner-perimeters");
 
+        optgroup->append_single_option_line("swap_first_int_w_ext_perimeter", category_path + "swap_first_int_w_ext_perimeter");
+        optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse_internal_perimeters");
+        optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse_internal_perimeters_at");
+
         optgroup->append_single_option_line("external_perimeters_first", category_path + "external-perimeters-first");
         optgroup->append_single_option_line("gap_fill_enabled", category_path + "fill-gaps");
         optgroup->append_single_option_line("perimeter_generator");
@@ -1586,6 +1590,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("perimeter_speed");
         optgroup->append_single_option_line("small_perimeter_speed");
         optgroup->append_single_option_line("external_perimeter_speed");
+        optgroup->append_single_option_line("first_internal_perimeter_speed");
         optgroup->append_single_option_line("infill_speed");
         optgroup->append_single_option_line("solid_infill_speed");
         optgroup->append_single_option_line("top_solid_infill_speed");
@@ -1614,6 +1619,7 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Acceleration control (advanced)"));
         optgroup->append_single_option_line("external_perimeter_acceleration");
+        optgroup->append_single_option_line("first_internal_perimeter_acceleration");
         optgroup->append_single_option_line("perimeter_acceleration");
         optgroup->append_single_option_line("top_solid_infill_acceleration");
         optgroup->append_single_option_line("solid_infill_acceleration");
@@ -1676,6 +1682,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("first_layer_extrusion_width");
         optgroup->append_single_option_line("perimeter_extrusion_width");
         optgroup->append_single_option_line("external_perimeter_extrusion_width");
+        //optgroup->append_single_option_line("first_internal_perimeter_extrusion_width");
         optgroup->append_single_option_line("infill_extrusion_width");
         optgroup->append_single_option_line("solid_infill_extrusion_width");
         optgroup->append_single_option_line("top_infill_extrusion_width");

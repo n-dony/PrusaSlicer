@@ -28,6 +28,7 @@ enum class ExtrusionRoleModifier : uint16_t {
     Wipe,
 // 2) Extrusion modifiers
     External,
+    FirstInternal, 
     Solid,
     Ironing,
     Bridge,
@@ -55,6 +56,7 @@ struct ExtrusionRole : public ExtrusionRoleModifiers
     static constexpr const ExtrusionRoleModifiers Perimeter{ ExtrusionRoleModifier::Perimeter };
     // External perimeter, not bridging.
     static constexpr const ExtrusionRoleModifiers ExternalPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::External };
+    static constexpr const ExtrusionRoleModifiers FirstInternalPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::FirstInternal };
     // Perimeter, bridging. To be or'ed with ExtrusionRoleModifier::External for external bridging perimeter.
     static constexpr const ExtrusionRoleModifiers OverhangPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::Bridge };
     // Sparse internal infill.
@@ -87,10 +89,12 @@ struct ExtrusionRole : public ExtrusionRoleModifiers
 
     bool is_perimeter() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Perimeter); }
     bool is_external_perimeter() const { return this->is_perimeter() && this->is_external(); }
+    bool is_first_internal_perimeter() const { return this->is_perimeter() && this->is_first_internal(); }
     bool is_infill() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Infill); }
     bool is_solid_infill() const { return this->is_infill() && this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Solid); }
     bool is_sparse_infill() const { return this->is_infill() && ! this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Solid); }
     bool is_external() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::External); }
+    bool is_first_internal() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::FirstInternal); }
     bool is_bridge() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Bridge); }
 
     bool is_support() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Support); }
@@ -116,6 +120,7 @@ enum class GCodeExtrusionRole : uint8_t {
     None,
     Perimeter,
     ExternalPerimeter,
+    FirstInternalPerimeter,
     OverhangPerimeter,
     InternalInfill,
     SolidInfill,

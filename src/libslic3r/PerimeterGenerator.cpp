@@ -186,6 +186,7 @@ public:
         polygon(polygon), is_contour(is_contour), depth(depth) {}
     // External perimeter. It may be CCW or CW oriented (outer contour or hole contour).
     bool is_external() const { return this->depth == 0; }
+    bool is_first_internal() const { return this->depth == 1; }
     // An island, which may have holes, but it does not have another internal island.
     bool is_internal_contour() const {
         // An internal contour is a contour containing no other contours
@@ -209,9 +210,11 @@ static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator
     ExtrusionEntityCollection coll;
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
+        bool is_first_internal = loop.is_first_internal();
         
         ExtrusionLoopRole loop_role;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
+                      role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
         ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
         if (loop.is_internal_contour()) {
             // Note that we set loop role to ContourInternalPerimeter
@@ -425,7 +428,9 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
             continue;
 
         const bool    is_external   = extrusion.inset_idx == 0;
+        const bool    is_first_internal   = extrusion.inset_idx == 1;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
+        role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
         ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
 
         // Apply fuzzy skin if it is enabled for at least some part of the ExtrusionLine.
@@ -1116,7 +1121,7 @@ void PerimeterGenerator::process_arachne(
         return true;
     }());
 
-    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first);
+    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first, params.config.swap_first_int_w_ext_perimeter, params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at );
 
     if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
         out_loops.append(extrusion_coll);

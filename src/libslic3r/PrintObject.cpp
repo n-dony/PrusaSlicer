@@ -1386,10 +1386,11 @@ void PrintObject::discover_vertical_shells()
                         // Then calculate the infill offset.
                         if (perimeters > 0) {
                             Flow extflow = layerm.flow(frExternalPerimeter);
+                            Flow firstintflow = layerm.flow(frFirstInternalPerimeter);
                             Flow flow    = layerm.flow(frPerimeter);
                             perimeter_offset = std::max(perimeter_offset,
-                                0.5f * float(extflow.scaled_width() + extflow.scaled_spacing()) + (float(perimeters) - 1.f) * flow.scaled_spacing());
-                            perimeter_min_spacing = std::min(perimeter_min_spacing, float(std::min(extflow.scaled_spacing(), flow.scaled_spacing())));
+                                0.5f * float(extflow.scaled_width() + extflow.scaled_spacing()) + firstintflow.scaled_spacing() +  (float(perimeters) - 2.f) * flow.scaled_spacing());
+                            perimeter_min_spacing = std::min(perimeter_min_spacing, float(std::min(std::min(extflow.scaled_spacing(), flow.scaled_spacing()), firstintflow.scaled_spacing())));
                         }
                         polygons_append(cache.holes, to_polygons(layerm.fill_expolygons()));
                     }
