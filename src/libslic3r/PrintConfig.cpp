@@ -1693,6 +1693,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(30, false));
 
+
     def = this->add("first_layer_infill_speed", coFloatOrPercent);
     def->label = L("First layer solid infill speed");
     def->tooltip = L("If expressed as absolute value in mm/s, this speed will be applied to the solid infill print moves "
@@ -1714,6 +1715,167 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(30, false));
+
+    // Temperature offset configurations
+    def = this->add("enable_temperature_offsets", coBool);
+    def->label = L("Enable temperature offsets");
+    def->category = L("Temperature");
+    def->tooltip = L("Enable or disable temperature offset functionality. "
+                   "When disabled, all temperature offsets are ignored.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("temperature_change_threshold", coFloat);
+    def->label = L("Temperature change threshold");
+    def->category = L("Temperature");
+    def->tooltip = L("Minimum temperature difference required before issuing a temperature change command. "
+                   "This helps reduce unnecessary temperature fluctuations.");
+    def->sidetext = L("°C");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(1));
+
+    def = this->add("temperature_wait_for_region_change", coBool);
+    def->label = L("Wait for temperature on region change");
+    def->category = L("Temperature");
+    def->tooltip = L("If enabled, the printer will wait for the new temperature to be reached "
+                   "when changing between regions with different temperature offsets. "
+                   "If disabled, temperature changes are non-blocking.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("external_perimeter_temperature_offset", coFloats);
+    def->label = L("External perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing external perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("first_internal_perimeter_temperature_offset", coFloats);
+    def->label = L("First internal perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing the first internal perimeter. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("perimeter_temperature_offset", coFloats);
+    def->label = L("Other perimeters");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing other perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("infill_temperature_offset", coFloats);
+    def->label = L("Infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("solid_infill_temperature_offset", coFloats);
+    def->label = L("Solid infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing solid infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("top_solid_infill_temperature_offset", coFloats);
+    def->label = L("Top solid infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing top solid infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("support_material_temperature_offset", coFloats);
+    def->label = L("Support material");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing support material. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("support_material_interface_temperature_offset", coFloats);
+    def->label = L("Support interface");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing support interface. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("bridge_temperature_offset", coFloats);
+    def->label = L("Bridges");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing bridges. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("overhang_perimeter_temperature_offset", coFloats);
+    def->label = L("Overhang perimeters");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing overhang perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("gap_fill_temperature_offset", coFloats);
+    def->label = L("Gap fill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing gap fill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("ironing_temperature_offset", coFloats);
+    def->label = L("Ironing");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when ironing. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
 
     def = this->add("first_layer_temperature", coInts);
     def->label = L("First layer");
@@ -2528,6 +2690,7 @@ void PrintConfigDef::init_fff_params()
     def->sidetext = L("mm/s²");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0));
+
 
     def = this->add("perimeter_extruder", coInt);
     def->label = L("Perimeter extruder");
@@ -3840,17 +4003,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
 
-    def = this->add("solid_infill_every_layers", coInt);
-    def->label = L("Solid infill every");
-    def->category = L("Infill");
-    def->tooltip = L("This feature allows to force a solid layer every given number of layers. "
-                   "Zero to disable. You can set this to any value (for example 9999); "
-                   "Slic3r will automatically choose the maximum possible number of layers "
-                   "to combine according to nozzle diameter and layer height.");
-    def->sidetext = L("layers");
-    def->min = 0;
-    def->mode = comExpert;
-    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("xy_size_compensation", coFloat);
     def->label = L("XY Size Compensation");

@@ -446,6 +446,33 @@ private:
     std::optional<Vec3d>                m_previous_layer_last_position_before_wipe;
     bool                                m_moved_to_first_layer_point{false};
 
+    struct RegionTemperatureManager {
+        int base_temperature = 0;
+        int current_temperature = 0;
+        ExtrusionRole last_role = ExtrusionRole::None;
+        bool enabled = false;
+        
+        int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
+        
+        bool should_change_temperature(int new_temp, float threshold) const {
+            return std::abs(new_temp - current_temperature) >= threshold;
+        }
+        
+        std::string set_temperature_if_needed(GCodeWriter& writer, ExtrusionRole role, 
+                                             const PrintConfig& config, int extruder_id);
+        
+        void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
+        
+        void reset() {
+            base_temperature = 0;
+            current_temperature = 0;
+            last_role = ExtrusionRole::None;
+            enabled = false;
+        }
+    };
+    
+    RegionTemperatureManager m_temperature_manager;
+
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
     std::unique_ptr<SpiralVase>         m_spiral_vase;

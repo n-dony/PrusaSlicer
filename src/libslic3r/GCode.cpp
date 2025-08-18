@@ -15,7 +15,7 @@
 ///|/ ported from lib/Slic3r/GCode.pm:
 ///|/ Copyright (c) Slic3r 2011 - 2015 Alessandro Ranellucci @alranel
 ///|/ Copyright (c) 2013 Robert Giseburt
-///|/ Copyright (c) 2012 Mark Hindess
+///|/ Copyright (c) 2012 Mark Hindesssafe
 ///|/ Copyright (c) 2012 Henrik Brix Andersen @henrikbrixandersen
 ///|/
 ///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
@@ -179,6 +179,94 @@ namespace Slic3r {
     const std::vector<std::string> ColorPrintColors::Colors = { "#C0392B", "#E67E22", "#F1C40F", "#27AE60", "#1ABC9C", "#2980B9", "#9B59B6" };
 
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
+
+// RegionTemperatureManager implementation
+    int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role(
+        ExtrusionRole role, const PrintConfig& config, int extruder_id) const
+        {
+            if (!enabled || extruder_id < 0)
+                return base_temperature;
+            printf("DEBUG: Manager A ");
+            float offset = 0;
+
+            // Safely check size before accessing
+            auto safe_get = [extruder_id](const ConfigOptionFloats& opt) -> float {
+                if (opt.values.empty())
+                    return 0;
+                return (extruder_id < opt.values.size()) ?
+                opt.values[extruder_id] : opt.values[0];
+            };
+
+            // Direct comparison with ExtrusionRole constants, just like PrusaSlicer does
+            if (role == ExtrusionRole::ExternalPerimeter) {
+                offset = safe_get(config.external_perimeter_temperature_offset);
+            } else if (role == ExtrusionRole::FirstInternalPerimeter) {
+                offset = safe_get(config.first_internal_perimeter_temperature_offset);
+            } else if (role == ExtrusionRole::Perimeter) {
+                offset = safe_get(config.perimeter_temperature_offset);
+            } else if (role == ExtrusionRole::OverhangPerimeter) {
+                offset = safe_get(config.overhang_perimeter_temperature_offset);
+            } else if (role == ExtrusionRole::InternalInfill) {
+                offset = safe_get(config.infill_temperature_offset);
+            } else if (role == ExtrusionRole::SolidInfill) {
+                offset = safe_get(config.solid_infill_temperature_offset);
+            } else if (role == ExtrusionRole::TopSolidInfill) {
+                offset = safe_get(config.top_solid_infill_temperature_offset);
+            } else if (role == ExtrusionRole::SupportMaterial) {
+                offset = safe_get(config.support_material_temperature_offset);
+            } else if (role == ExtrusionRole::SupportMaterialInterface) {
+                offset = safe_get(config.support_material_interface_temperature_offset);
+            } else if (role == ExtrusionRole::BridgeInfill) {
+                offset = safe_get(config.bridge_temperature_offset);
+            } else if (role == ExtrusionRole::GapFill) {
+                offset = safe_get(config.gap_fill_temperature_offset);
+            } else if (role == ExtrusionRole::Ironing) {
+                offset = safe_get(config.ironing_temperature_offset);
+            } else {
+                // For any other roles, no offset
+                offset = 0;
+            }
+            printf("DEBUG: Manager B ");
+
+            return base_temperature + static_cast<int>(offset);
+        }
+
+
+    std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
+            GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)
+        {
+            if (!enabled || !config.enable_temperature_offsets)
+                return "";
+
+            int target_temp = get_temperature_for_role(role, config, extruder_id);
+
+            if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
+                current_temperature = target_temp;
+                last_role = role;
+
+                // Convert ExtrusionRole to GCodeExtrusionRole for string output
+                // Use the existing conversion function from ExtrusionRole.cpp
+                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
+
+                // Now use the string conversion function
+                std::string gcode = "; Temperature change for " + gcode_extrusion_role_to_string(gcode_role) + "\n";
+                gcode += writer.set_temperature(target_temp, config.temperature_wait_for_region_change, extruder_id);
+                return gcode;
+            }
+            return "";
+        }
+
+    void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
+        {
+            if (config.enable_temperature_offsets && extruder_id >= 0) {
+                enabled = true;
+                base_temperature = (layer_index == 0) ?
+                config.first_layer_temperature.get_at(extruder_id) :
+                config.temperature.get_at(extruder_id);
+                current_temperature = base_temperature;
+            }
+        }
+
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
@@ -1564,6 +1652,10 @@ void GCodeGenerator::process_layers(
                 const LayerTools& layer_tools = tool_ordering.tools_for_layer(layer.first);
                 if (m_wipe_tower && layer_tools.has_wipe_tower)
                     m_wipe_tower->next_layer();
+                // Initialize temperature manager for the layer
+                if (m_writer.extruder()) {
+                    m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
+                }
                 print.throw_if_canceled();
                 return this->process_layer(print, layer.second, layer_tools, 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
@@ -1658,6 +1750,10 @@ void GCodeGenerator::process_layers(
                 return LayerResult::make_nop_layer_result();
             } else {
                 ObjectLayerToPrint &layer = layers_to_print[layer_to_print_idx];
+                // Initialize temperature manager for the layer
+                if (m_writer.extruder()) {
+                    m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
+                }
                 print.throw_if_canceled();
                 return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
@@ -3433,6 +3529,8 @@ std::string GCodeGenerator::_extrude(
             speed = m_config.get_abs_value("external_perimeter_speed");
         } else if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
             speed = m_config.get_abs_value("first_internal_perimeter_speed");
+        } else if (path_attr.role == ExtrusionRole::OverhangPerimeter) {
+            speed = m_config.get_abs_value("external_perimeter_speed"); // Use external perimeter speed for overhangs
         } else if (path_attr.role.is_bridge()) {
             assert(path_attr.role.is_perimeter() || path_attr.role == ExtrusionRole::BridgeInfill);
             speed = m_config.get_abs_value("bridge_speed");
@@ -3458,6 +3556,14 @@ std::string GCodeGenerator::_extrude(
             throw Slic3r::InvalidArgument("Invalid speed");
         }
     }
+    
+    // Add temperature management for region changes
+    if (m_config.enable_temperature_offsets && m_writer.extruder()) {
+        gcode += m_temperature_manager.set_temperature_if_needed(
+            m_writer, path_attr.role, m_config, m_writer.extruder()->id()
+        );
+    }
+    
     if (m_volumetric_speed != 0. && speed == 0)
         speed = m_volumetric_speed / path_attr.mm3_per_mm;
     if (this->on_first_layer()) {
