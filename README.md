@@ -1,7 +1,8 @@
 
 ![PrusaSlicer logo](/resources/icons/PrusaSlicer.png?raw=true) 
 
-# PrusaSlicer Perimeter Order Freedom Edition : Fine-Tune Your Prints with Advanced Perimeter Ordering 
+# PrusaSlicer with advanced perimeter ordering and role-based temperature offsets.
+
 
 You may want to check the [PrusaSlicer project page](https://www.prusa3d.com/prusaslicer/).
 
