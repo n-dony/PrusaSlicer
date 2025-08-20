@@ -55,6 +55,7 @@ struct Parameters {
         Flow                        perimeter_flow,
         Flow                        ext_perimeter_flow,
         Flow                        first_internal_perimeter_flow,
+        Flow                        second_internal_perimeter_flow,
         Flow                        overhang_flow,
         Flow                        solid_infill_flow,
         const PrintRegionConfig    &config,
@@ -66,7 +67,8 @@ struct Parameters {
             layer_id(layer_id),
             perimeter_flow(perimeter_flow), 
             ext_perimeter_flow(ext_perimeter_flow),
-            first_internal_perimeter_flow(ext_perimeter_flow),
+            first_internal_perimeter_flow(first_internal_perimeter_flow),
+            second_internal_perimeter_flow(second_internal_perimeter_flow),
             overhang_flow(overhang_flow), 
             solid_infill_flow(solid_infill_flow),
             config(config), 
@@ -87,6 +89,7 @@ struct Parameters {
     Flow                         perimeter_flow;
     Flow                         ext_perimeter_flow;
     Flow                         first_internal_perimeter_flow;
+    Flow                         second_internal_perimeter_flow;
     Flow                         overhang_flow;
     Flow                         solid_infill_flow;
     const PrintRegionConfig     &config;

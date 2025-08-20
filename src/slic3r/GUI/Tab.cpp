@@ -1591,6 +1591,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("small_perimeter_speed");
         optgroup->append_single_option_line("external_perimeter_speed");
         optgroup->append_single_option_line("first_internal_perimeter_speed");
+        optgroup->append_single_option_line("second_internal_perimeter_speed");
         optgroup->append_single_option_line("infill_speed");
         optgroup->append_single_option_line("solid_infill_speed");
         optgroup->append_single_option_line("top_solid_infill_speed");
@@ -1620,6 +1621,7 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Acceleration control (advanced)"));
         optgroup->append_single_option_line("external_perimeter_acceleration");
         optgroup->append_single_option_line("first_internal_perimeter_acceleration");
+        optgroup->append_single_option_line("second_internal_perimeter_acceleration");
         optgroup->append_single_option_line("perimeter_acceleration");
         optgroup->append_single_option_line("top_solid_infill_acceleration");
         optgroup->append_single_option_line("solid_infill_acceleration");
@@ -1649,6 +1651,7 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Temperature offsets"));
         optgroup->append_single_option_line("external_perimeter_temperature_offset");
         optgroup->append_single_option_line("first_internal_perimeter_temperature_offset");
+        optgroup->append_single_option_line("second_internal_perimeter_temperature_offset");
         optgroup->append_single_option_line("perimeter_temperature_offset");
         optgroup->append_single_option_line("infill_temperature_offset");
         optgroup->append_single_option_line("solid_infill_temperature_offset");
@@ -1705,6 +1708,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("perimeter_extrusion_width");
         optgroup->append_single_option_line("external_perimeter_extrusion_width");
         //optgroup->append_single_option_line("first_internal_perimeter_extrusion_width");
+        //optgroup->append_single_option_line("second_internal_perimeter_extrusion_width");
         optgroup->append_single_option_line("infill_extrusion_width");
         optgroup->append_single_option_line("solid_infill_extrusion_width");
         optgroup->append_single_option_line("top_infill_extrusion_width");

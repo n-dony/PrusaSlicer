@@ -1118,6 +1118,34 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
 
+    /*def = this->add("second_internal_perimeter_extrusion_width", coFloatOrPercent);
+     *
+
+    def->label = L("First internal perimeters");
+    def->category = L("Extrusion Width");
+    def->tooltip = L("Set this to a non-zero value to set a manual extrusion width for second internal perimeters. "
+    "If left zero, default extrusion width will be used if set, otherwise 1.125 x nozzle diameter will be used. "
+    "If expressed as percentage (for example 200%), it will be computed over layer height.");
+    def->sidetext = L("mm or %");
+    def->min = 0;
+    def->max_literal = 50;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(0, false));
+    */
+
+    def = this->add("second_internal_perimeter_speed", coFloatOrPercent);
+    def->label = L("Second internal perimeters");
+    def->category = L("Speed");
+    def->tooltip = L("This separate setting will affect the speed of second internal perimeters (the visible ones). "
+    "If expressed as percentage (for example: 80%) it will be calculated "
+    "on the perimeters speed setting above. Set to zero for auto.");
+    def->sidetext = L("mm/s or %");
+    def->ratio_over = "perimeter_speed";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
+
+
     def = this->add("swap_first_int_w_ext_perimeter", coBool);
     def->label = L("Exchange the first internal perimeters with their external perimeter");
     def->category = L("Layers and Perimeters");
@@ -1761,6 +1789,17 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing the first internal perimeter. "
                    "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("second_internal_perimeter_temperature_offset", coFloats);
+    def->label = L("Second internal perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing the second internal perimeter. "
+    "This value is added to the base temperature for the current layer.");
     def->sidetext = L("°C");
     def->min = -50;
     def->max = 50;
@@ -2691,6 +2730,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0));
 
+
+    def = this->add("second_internal_perimeter_acceleration", coFloat);
+    def->label = L("Second internal perimeters");
+    def->tooltip = L("This is the acceleration your printer will use for second internal perimeters. "
+    "Set zero to use the value for perimeters.");
+    def->sidetext = L("mm/s²");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("perimeter_extruder", coInt);
     def->label = L("Perimeter extruder");

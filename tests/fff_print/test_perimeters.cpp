@@ -313,6 +313,7 @@ SCENARIO("Perimeters", "[Perimeters]")
             { "perimeter_speed",            77 },
             { "external_perimeter_speed",   66 },
             { "first_internal_perimeter_speed",   66 },
+            { "second_internal_perimeter_speed",   66 },
             { "enable_dynamic_overhang_speeds", false },
             { "bridge_speed",               99 },
             { "cooling",                    "1" },
