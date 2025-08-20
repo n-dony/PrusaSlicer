@@ -1135,7 +1135,7 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
     const libvgcode::AABox bbox = wxGetApp().is_gcode_viewer() ?
         m_viewer.get_bounding_box() :
         m_viewer.get_extrusion_bounding_box({
-            libvgcode::EGCodeExtrusionRole::Perimeter, libvgcode::EGCodeExtrusionRole::ExternalPerimeter, libvgcode::EGCodeExtrusionRole::FirstInternalPerimeter, libvgcode::EGCodeExtrusionRole::OverhangPerimeter,
+            libvgcode::EGCodeExtrusionRole::Perimeter, libvgcode::EGCodeExtrusionRole::ExternalPerimeter, libvgcode::EGCodeExtrusionRole::FirstInternalPerimeter, libvgcode::EGCodeExtrusionRole::SecondInternalPerimeter, libvgcode::EGCodeExtrusionRole::OverhangPerimeter,
             libvgcode::EGCodeExtrusionRole::InternalInfill, libvgcode::EGCodeExtrusionRole::SolidInfill, libvgcode::EGCodeExtrusionRole::TopSolidInfill,
             libvgcode::EGCodeExtrusionRole::Ironing, libvgcode::EGCodeExtrusionRole::BridgeInfill, libvgcode::EGCodeExtrusionRole::GapFill,
             libvgcode::EGCodeExtrusionRole::Skirt, libvgcode::EGCodeExtrusionRole::SupportMaterial, libvgcode::EGCodeExtrusionRole::SupportMaterialInterface,
@@ -1233,6 +1233,7 @@ void GCodeViewer::load_as_preview(libvgcode::GCodeInputData&& data)
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::Skirt,                    { 127, 255, 127 });
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::ExternalPerimeter,        { 255, 255, 0 });
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::FirstInternalPerimeter,   { 255, 255, 50 });
+    m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::SecondInternalPerimeter,   { 255, 50, 50 });
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::SupportMaterial,          { 127, 255, 127 });
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::SupportMaterialInterface, { 127, 255, 127 });
     m_viewer.set_extrusion_role_color(libvgcode::EGCodeExtrusionRole::InternalInfill,           { 255, 127, 127 });
