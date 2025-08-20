@@ -410,6 +410,7 @@ static std::string to_string(libvgcode::EGCodeExtrusionRole role)
     case libvgcode::EGCodeExtrusionRole::Perimeter:                { return _u8L("Perimeter"); }
     case libvgcode::EGCodeExtrusionRole::ExternalPerimeter:        { return _u8L("External perimeter"); }
     case libvgcode::EGCodeExtrusionRole::FirstInternalPerimeter:   { return _u8L("First internal perimeter"); }
+    case libvgcode::EGCodeExtrusionRole::SecondInternalPerimeter:   { return _u8L("Second internal perimeter"); }
     case libvgcode::EGCodeExtrusionRole::OverhangPerimeter:        { return _u8L("Overhang perimeter"); }
     case libvgcode::EGCodeExtrusionRole::InternalInfill:           { return _u8L("Internal infill"); }
     case libvgcode::EGCodeExtrusionRole::SolidInfill:              { return _u8L("Solid infill"); }

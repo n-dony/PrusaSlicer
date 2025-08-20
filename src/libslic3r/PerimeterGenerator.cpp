@@ -215,6 +215,7 @@ static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator
         ExtrusionLoopRole loop_role;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
                       role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
+                      role_normal   = is_second_internal ? ExtrusionRole::SecondInternalPerimeter : role_normal;
         ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
         if (loop.is_internal_contour()) {
             // Note that we set loop role to ContourInternalPerimeter
@@ -431,6 +432,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
         const bool    is_first_internal   = extrusion.inset_idx == 1;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
         role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
+        role_normal   = is_second_internal ? ExtrusionRole::SecondInternalPerimeter : role_normal;
         ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
 
         // Apply fuzzy skin if it is enabled for at least some part of the ExtrusionLine.

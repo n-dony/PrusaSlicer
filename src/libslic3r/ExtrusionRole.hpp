@@ -28,7 +28,8 @@ enum class ExtrusionRoleModifier : uint16_t {
     Wipe,
 // 2) Extrusion modifiers
     External,
-    FirstInternal, 
+    FirstInternal,
+    SecondInternal,
     Solid,
     Ironing,
     Bridge,
@@ -57,6 +58,7 @@ struct ExtrusionRole : public ExtrusionRoleModifiers
     // External perimeter, not bridging.
     static constexpr const ExtrusionRoleModifiers ExternalPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::External };
     static constexpr const ExtrusionRoleModifiers FirstInternalPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::FirstInternal };
+    static constexpr const ExtrusionRoleModifiers SecondInternalPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::SecondInternal };
     // Perimeter, bridging. To be or'ed with ExtrusionRoleModifier::External for external bridging perimeter.
     static constexpr const ExtrusionRoleModifiers OverhangPerimeter{ ExtrusionRoleModifier::Perimeter | ExtrusionRoleModifier::Bridge };
     // Sparse internal infill.
@@ -121,6 +123,7 @@ enum class GCodeExtrusionRole : uint8_t {
     Perimeter,
     ExternalPerimeter,
     FirstInternalPerimeter,
+    SecondInternalPerimeter,
     OverhangPerimeter,
     InternalInfill,
     SolidInfill,
