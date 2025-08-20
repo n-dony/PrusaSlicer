@@ -432,6 +432,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
 
         const bool    is_external   = extrusion.inset_idx == 0;
         const bool    is_first_internal   = extrusion.inset_idx == 1;
+        const bool    is_second_internal   = extrusion.inset_idx == 2;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
         role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
         role_normal   = is_second_internal ? ExtrusionRole::SecondInternalPerimeter : role_normal;
