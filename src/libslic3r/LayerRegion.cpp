@@ -121,6 +121,7 @@ void LayerRegion::make_perimeters(
         this->flow(frPerimeter),
         this->flow(frExternalPerimeter),
         this->flow(frFirstInternalPerimeter),
+        this->flow(frSecondInternalPerimeter),
         this->bridging_flow(frPerimeter),
         this->flow(frSolidInfill),
         region_config,
