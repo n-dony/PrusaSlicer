@@ -31,6 +31,7 @@ class ConfigOptionResolver;
 enum FlowRole {
     frExternalPerimeter,
     frFirstInternalPerimeter,
+    frSecondInternalPerimeter,
     frPerimeter,
     frInfill,
     frSolidInfill,
