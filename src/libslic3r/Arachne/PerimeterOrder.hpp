@@ -41,6 +41,7 @@ struct PerimeterExtrusion
     // Returns if ExtrusionLine is an external or an internal perimeter.
     bool is_external_perimeter() const { return extrusion.is_external_perimeter(); }
     bool is_first_internal_perimeter() const { return extrusion.is_first_internal_perimeter(); }
+    bool is_second_internal_perimeter() const { return extrusion.is_second_internal_perimeter(); }
 };
 
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;

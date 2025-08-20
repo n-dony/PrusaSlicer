@@ -92,11 +92,13 @@ struct ExtrusionRole : public ExtrusionRoleModifiers
     bool is_perimeter() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Perimeter); }
     bool is_external_perimeter() const { return this->is_perimeter() && this->is_external(); }
     bool is_first_internal_perimeter() const { return this->is_perimeter() && this->is_first_internal(); }
+    bool is_second_internal_perimeter() const { return this->is_perimeter() && this->is_second_internal(); }
     bool is_infill() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Infill); }
     bool is_solid_infill() const { return this->is_infill() && this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Solid); }
     bool is_sparse_infill() const { return this->is_infill() && ! this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Solid); }
     bool is_external() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::External); }
     bool is_first_internal() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::FirstInternal); }
+    bool is_second_internal() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::SecondInternal); }
     bool is_bridge() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Bridge); }
 
     bool is_support() const { return this->ExtrusionRoleModifiers::has(ExtrusionRoleModifier::Support); }
