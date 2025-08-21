@@ -477,9 +477,20 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
         Flow first_internal_perimeter_flow = this->flow(frFirstInternalPerimeter);
         Flow second_internal_perimeter_flow = this->flow(frSecondInternalPerimeter);
         Flow perimeter_flow          = this->flow(frPerimeter);
-        shell_width  = 0.5f * external_perimeter_flow.scaled_width() + external_perimeter_flow.scaled_spacing();
-        shell_width += first_internal_perimeter_flow.scaled_spacing() ;
-        shell_width += second_internal_perimeter_flow.scaled_spacing() + perimeter_flow.scaled_spacing() * (num_perimeters - 3);
+        //shell_width  = 0.5f * external_perimeter_flow.scaled_width() + external_perimeter_flow.scaled_spacing();
+        shell_width = 0.5f * external_perimeter_flow.scaled_width() + external_perimeter_flow.scaled_spacing();
+
+        if (num_perimeters >= 2) {
+            shell_width += first_internal_perimeter_flow.scaled_spacing();
+        }
+        if (num_perimeters >= 3) {
+            shell_width += second_internal_perimeter_flow.scaled_spacing();
+        }
+        if (num_perimeters > 3) {
+            shell_width += perimeter_flow.scaled_spacing() * (num_perimeters - 3);
+        }
+        //shell_width += first_internal_perimeter_flow.scaled_spacing() ;
+        //shell_width += second_internal_perimeter_flow.scaled_spacing() + perimeter_flow.scaled_spacing() * (num_perimeters - 3);
         expansion_min = perimeter_flow.scaled_spacing();
     } else {
         // TODO: Maybe there is better solution when printing with zero perimeters, but this works reasonably well, given the situation

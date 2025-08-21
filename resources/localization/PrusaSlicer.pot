@@ -37,6 +37,16 @@ msgstr ""
 msgid "External perimeter"
 msgstr ""
 
+#: src/libslic3r/ExtrusionRole.cpp:44 src/libslic3r/ExtrusionRole.cpp:66
+#: src/slic3r/GUI/GCodeViewer.cpp:411
+msgid "First internal perimeter"
+msgstr ""
+
+#: src/libslic3r/ExtrusionRole.cpp:44 src/libslic3r/ExtrusionRole.cpp:66
+#: src/slic3r/GUI/GCodeViewer.cpp:411
+msgid "Second internal perimeter"
+msgstr ""
+
 #: src/libslic3r/ExtrusionRole.cpp:45 src/libslic3r/ExtrusionRole.cpp:68
 #: src/slic3r/GUI/GCodeViewer.cpp:412
 msgid "Overhang perimeter"
