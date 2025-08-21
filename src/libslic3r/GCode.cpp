@@ -1177,7 +1177,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             const PrintRegion &region = print.get_print_region(region_id);
             file.write_format("; external perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frExternalPerimeter, layer_height).width());
             file.write_format("; first internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frFirstInternalPerimeter, layer_height).width());
-            file.write_format("; seccond internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frSecondInternalPerimeter, layer_height).width());
+            file.write_format("; second internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frSecondInternalPerimeter, layer_height).width());
             file.write_format("; perimeters extrusion width = %.2fmm\n",          region.flow(*first_object, frPerimeter,         layer_height).width());
             file.write_format("; infill extrusion width = %.2fmm\n",              region.flow(*first_object, frInfill,            layer_height).width());
             file.write_format("; solid infill extrusion width = %.2fmm\n",        region.flow(*first_object, frSolidInfill,       layer_height).width());
