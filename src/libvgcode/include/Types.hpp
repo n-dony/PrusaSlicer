@@ -129,6 +129,7 @@ enum class EGCodeExtrusionRole : uint8_t
 	  Perimeter,
 	  ExternalPerimeter,
       FirstInternalPerimeter,
+      SecondInternalPerimeter,
 	  OverhangPerimeter,
 	  InternalInfill,
 	  SolidInfill,

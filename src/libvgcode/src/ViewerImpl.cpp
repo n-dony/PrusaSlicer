@@ -285,6 +285,7 @@ static const std::array<Color, size_t(EGCodeExtrusionRole::COUNT)> DEFAULT_EXTRU
     { 255, 230,  77 }, // Perimeter
     { 255, 125,  56 }, // ExternalPerimeter
     { 255, 15,  56 }, // FirstInternalPerimeter
+    { 255, 115,  56 }, // SecondInternalPerimeter
     {  31,  31, 255 }, // OverhangPerimeter
     { 176,  48,  41 }, // InternalInfill
     { 150,  84, 204 }, // SolidInfill
