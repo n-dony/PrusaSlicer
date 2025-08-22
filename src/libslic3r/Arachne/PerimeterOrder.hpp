@@ -44,9 +44,42 @@ struct PerimeterExtrusion
     bool is_second_internal_perimeter() const { return extrusion.is_second_internal_perimeter(); }
 };
 
+
+struct PerimeterDepthLayer {
+    std::vector<const PerimeterExtrusion*> externals;       // All depth 0
+    std::vector<const PerimeterExtrusion*> first_internals; // All depth 1
+    std::vector<const PerimeterExtrusion*> second_internals;// All depth 2
+    std::vector<const PerimeterExtrusion*> other_internals; // depth 3+
+
+    bool has_groove_structure() const {
+        return !externals.empty() &&
+        !first_internals.empty() &&
+        !second_internals.empty();
+    }
+
+    bool is_simple_two_perimeter() const {
+        return externals.size() == 1 &&
+        first_internals.size() == 1 &&
+        second_internals.empty();
+    }
+
+    size_t total_perimeter_count() const {
+        return externals.size() + first_internals.size() +
+        second_internals.size() + other_internals.size();
+    }
+};
+
+// Pattern types for multiple group interactions
+enum class MultiGroupPattern {
+    INDEPENDENT,      // Groups don't interact (separate islands)
+    CONCENTRIC,       // Nested groups (contour + holes)
+    ADJACENT,         // Groups touch/share boundaries
+    COMPLEX           // Mixed patterns
+};
+
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
 
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first,  bool swap_first_int_w_ext_perimeter,  bool reverse_internal_perimeters, int reverse_internal_perimeters_at);
+PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first,  bool enable_injection_molding_order,  bool reverse_internal_perimeters, int reverse_internal_perimeters_at);
 
 } // namespace Slic3r::Arachne::PerimeterOrder
 

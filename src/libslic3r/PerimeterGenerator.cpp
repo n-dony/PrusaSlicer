@@ -1126,7 +1126,7 @@ void PerimeterGenerator::process_arachne(
         return true;
     }());
 
-    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first, params.config.swap_first_int_w_ext_perimeter, params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at );
+    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first, params.config.enable_injection_molding_order, params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at );
 
     if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
         out_loops.append(extrusion_coll);

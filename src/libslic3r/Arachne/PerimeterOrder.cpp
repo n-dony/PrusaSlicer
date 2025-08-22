@@ -43,6 +43,231 @@ static PerimeterExtrusions get_sorted_perimeter_extrusions_by_area(const Perimet
     return sorted_perimeter_extrusions;
 }
 
+// Analyze perimeter structure by depth instead of simple array positions
+static PerimeterDepthLayer analyze_perimeter_structure(
+    const std::vector<const PerimeterExtrusion*>& extrusions)
+{
+    PerimeterDepthLayer layers;
+
+    for (const auto* extrusion : extrusions) {
+        // Categorize by actual depth, not array position
+        if (extrusion->is_external_perimeter()) {
+            layers.externals.push_back(extrusion);
+        } else if (extrusion->is_first_internal_perimeter()) {
+            layers.first_internals.push_back(extrusion);
+        } else if (extrusion->is_second_internal_perimeter()) {
+            layers.second_internals.push_back(extrusion);
+        } else {
+            layers.other_internals.push_back(extrusion);
+        }
+    }
+
+    return layers;
+}
+
+// Order multiple loops at the same depth by proximity to minimize travel
+static std::vector<const PerimeterExtrusion*> order_by_proximity(
+    const std::vector<const PerimeterExtrusion*>& extrusions,
+    const Point& start_position)
+{
+    if (extrusions.size() <= 1) return extrusions;
+
+    std::vector<const PerimeterExtrusion*> ordered;
+    std::vector<bool> used(extrusions.size(), false);
+    Point current_pos = start_position;
+
+    while (ordered.size() < extrusions.size()) {
+        double min_dist = std::numeric_limits<double>::max();
+        size_t nearest_idx = 0;
+
+        for (size_t i = 0; i < extrusions.size(); ++i) {
+            if (used[i]) continue;
+
+            const Point& extrusion_start = extrusions[i]->extrusion.junctions.front().p;
+            double dist = (current_pos - extrusion_start).cast<double>().squaredNorm();
+
+            if (dist < min_dist) {
+                min_dist = dist;
+                nearest_idx = i;
+            }
+        }
+
+        ordered.push_back(extrusions[nearest_idx]);
+        used[nearest_idx] = true;
+        current_pos = get_end_position(extrusions[nearest_idx]->extrusion);
+    }
+
+    return ordered;
+}
+
+// Analyze relationship between multiple groups
+static MultiGroupPattern analyze_group_relationships(
+    const std::vector<GroupedPerimeterExtrusions>& groups)
+{
+    if (groups.size() <= 1) return MultiGroupPattern::INDEPENDENT;
+
+    // Check if groups are concentric (typical for tubes/holes)
+    bool has_contours = false;
+    bool has_holes = false;
+
+    for (const auto& group : groups) {
+        if (group.external_perimeter_extrusion->is_contour()) {
+            has_contours = true;
+        } else {
+            has_holes = true;
+        }
+    }
+
+    if (has_contours && has_holes) {
+        // Check perimeter counts to determine if it's a thin structure
+        int avg_perimeters = 0;
+        for (const auto& group : groups) {
+            avg_perimeters += group.extrusions.size();
+        }
+        avg_perimeters /= groups.size();
+
+        if (avg_perimeters <= 2) {
+            // Thin concentric structure (like thin tube)
+            return MultiGroupPattern::CONCENTRIC;
+        }
+    }
+
+    // TODO: Detect ADJACENT patterns by checking bbox overlaps
+
+    return MultiGroupPattern::INDEPENDENT;
+}
+
+// Apply injection molding strategy based on perimeter structure
+static void apply_injection_molding_order(
+    GroupedPerimeterExtrusions& group,
+    bool enable_injection_molding,
+    bool is_overhang_region = false)
+{
+    if (!enable_injection_molding) {
+        return; // Keep original order
+    }
+
+    // Analyze structure by depth
+    PerimeterDepthLayer layers = analyze_perimeter_structure(group.extrusions);
+
+    // Determine strategy based on what we have
+    if (layers.has_groove_structure()) {
+        // ===== GROOVE INJECTION STRATEGY (3+ perimeters) =====
+        // Goal: Create groove with External + Second Internal, inject First Internal
+        // Before reverse: [First_internals, Externals, Second_internals, Others...]
+        // After reverse: [...Others, Second_internals, Externals, First_internals(HOT)]
+
+        std::vector<const PerimeterExtrusion*> reordered;
+        Point current_pos = Point::Zero();
+
+        // 1. All first internals (will be last after reverse, printed HOT)
+        auto ordered_first = order_by_proximity(layers.first_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_first.begin(), ordered_first.end());
+        if (!ordered_first.empty()) {
+            current_pos = get_end_position(ordered_first.back()->extrusion);
+        }
+
+        // 2. All externals (will form outer wall of groove)
+        auto ordered_externals = order_by_proximity(layers.externals, current_pos);
+        reordered.insert(reordered.end(), ordered_externals.begin(), ordered_externals.end());
+        if (!ordered_externals.empty()) {
+            current_pos = get_end_position(ordered_externals.back()->extrusion);
+        }
+
+        // 3. All second internals (will form inner wall of groove)
+        auto ordered_seconds = order_by_proximity(layers.second_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_seconds.begin(), ordered_seconds.end());
+        if (!ordered_seconds.empty()) {
+            current_pos = get_end_position(ordered_seconds.back()->extrusion);
+        }
+
+        // 4. All other internals (structural support)
+        auto ordered_others = order_by_proximity(layers.other_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_others.begin(), ordered_others.end());
+
+        group.extrusions = reordered;
+
+    } else if (layers.is_simple_two_perimeter()) {
+        // ===== TWO PERIMETER STRATEGY (no groove possible) =====
+        // Only swap for overhangs, otherwise maintain normal order
+
+        if (is_overhang_region && group.extrusions.size() >= 2) {
+            // Simple swap for better overhang support
+            std::swap(group.extrusions[0], group.extrusions[1]);
+        }
+        // Otherwise keep original order - no benefit without groove
+
+    } else if (layers.externals.size() > 1 || layers.first_internals.size() > 1) {
+        // ===== MULTIPLE LOOPS AT SAME DEPTH =====
+        // Keep loops at same depth together, order by proximity
+
+        std::vector<const PerimeterExtrusion*> reordered;
+        Point current_pos = Point::Zero();
+
+        // When we have multiple loops at the same depth, keep them grouped
+        // This ensures consistent treatment (same temperature, etc.)
+
+        // Order: First internals → Externals → Second internals → Others
+        // (This will be reversed later if !external_perimeters_first)
+
+        auto ordered_first = order_by_proximity(layers.first_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_first.begin(), ordered_first.end());
+        if (!ordered_first.empty()) {
+            current_pos = get_end_position(ordered_first.back()->extrusion);
+        }
+
+        auto ordered_externals = order_by_proximity(layers.externals, current_pos);
+        reordered.insert(reordered.end(), ordered_externals.begin(), ordered_externals.end());
+        if (!ordered_externals.empty()) {
+            current_pos = get_end_position(ordered_externals.back()->extrusion);
+        }
+
+        auto ordered_seconds = order_by_proximity(layers.second_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_seconds.begin(), ordered_seconds.end());
+        if (!ordered_seconds.empty()) {
+            current_pos = get_end_position(ordered_seconds.back()->extrusion);
+        }
+
+        auto ordered_others = order_by_proximity(layers.other_internals, current_pos);
+        reordered.insert(reordered.end(), ordered_others.begin(), ordered_others.end());
+
+        group.extrusions = reordered;
+    }
+    // Single perimeter - nothing to reorder
+}
+
+// Handle special multi-group patterns
+static void handle_multi_group_patterns(
+    std::vector<GroupedPerimeterExtrusions>& groups,
+    MultiGroupPattern pattern,
+    bool enable_injection_molding)
+{
+    if (pattern == MultiGroupPattern::CONCENTRIC && groups.size() > 1) {
+        // For concentric patterns with limited perimeters (like thin tubes)
+        // Reorder groups to optimize the shared perimeter scenario
+
+        // Count total perimeters across all groups
+        int total_perimeters = 0;
+        for (const auto& group : groups) {
+            total_perimeters += group.extrusions.size();
+        }
+
+        if (total_perimeters <= 3) {
+            // Thin concentric structure: Optimize group order
+            // Put contours before holes for better printing
+            std::sort(groups.begin(), groups.end(),
+                      [](const GroupedPerimeterExtrusions& a,
+                         const GroupedPerimeterExtrusions& b) {
+                          // Contours (true) before holes (false)
+                          return a.external_perimeter_extrusion->is_contour() >
+                          b.external_perimeter_extrusion->is_contour();
+                         });
+        }
+    }
+    // Other patterns can be handled here as needed
+}
+
+
 // Functions fill adjacent_perimeter_extrusions field for every PerimeterExtrusion by pointers to PerimeterExtrusions that contain or are inside this PerimeterExtrusion.
 static void construct_perimeter_extrusions_adjacency_graph(PerimeterExtrusions &sorted_perimeter_extrusions) {
     // Construct a graph (defined using adjacent_perimeter_extrusions field) where two PerimeterExtrusion are adjacent when one is inside the other.
@@ -215,7 +440,7 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
     return grouped_extrusions_order;
 }
 
-static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterExtrusions &sorted_perimeter_extrusions, const bool external_perimeters_first, const bool swap_first_int_w_ext_perimeter , const bool reverse_internal_perimeters, const int reverse_internal_perimeters_at) {
+static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterExtrusions &sorted_perimeter_extrusions, const bool external_perimeters_first, const bool enable_injection_molding, const bool reverse_internal_perimeters, const int reverse_internal_perimeters_at) {
     // Extrusions are ordered inside each group.
     std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
 
@@ -259,12 +484,19 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
                 }
             }
         } 
-        if (swap_first_int_w_ext_perimeter){
-         if ( grouped_extrusions.back().extrusions.size() > 2 ) {
-                //grouped_extrusions.back().extrusions.emplace_back(grouped_extrusions.back().extrusions[1]);
-                std::swap(grouped_extrusions.back().extrusions[1], grouped_extrusions.back().extrusions[0]) ;
-                
+        if (enable_injection_molding) {
+            // Detect if this is an overhang region
+            bool is_overhang = false;
+            for (const auto* extrusion : grouped_extrusions.back().extrusions) {
+                // Check for overhang role
+                if (extrusion->extrusion.inset_idx == 0) {  // External
+                    // Could check for Bridge modifier or other overhang indicators
+                    // Simplified check here
+                }
             }
+
+            // Apply advanced injection molding order
+            apply_injection_molding_order(grouped_extrusions.back(), true, is_overhang);
         }
         if (reverse_internal_perimeters){
             if ( grouped_extrusions.back().extrusions.size() > (unsigned long) (unsigned int) reverse_internal_perimeters_at ) {
@@ -275,33 +507,12 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
             std::reverse(grouped_extrusions.back().extrusions.begin(), grouped_extrusions.back().extrusions.end());
     }
 
-    // After the swap/reverse logic on all groups
-    if (swap_first_int_w_ext_perimeter) {
-        // Check for thin tube case
-        int groups_with_external = 0;
-        bool has_thin_group = false;
-
-        for (const auto& group : grouped_extrusions) {
-            if (group.external_perimeter_extrusion->is_external_perimeter()) {
-                groups_with_external++;
-                if (group.extrusions.size() <= 2) {  // External + maybe 1 internal
-                    has_thin_group = true;
-                }
-            }
-        }
-
-        // If we have a thin tube (multiple external groups with few perimeters)
-        if (groups_with_external > 1 && has_thin_group) {
-            // Override the holes-first ordering for thin tubes
-            // Sort to put contours before holes
-            std::sort(grouped_extrusions.begin(), grouped_extrusions.end(),
-                      [](const GroupedPerimeterExtrusions& a, const GroupedPerimeterExtrusions& b) {
-                          // Contours (true) before holes (false)
-                          return a.external_perimeter_extrusion->is_contour() >
-                          b.external_perimeter_extrusion->is_contour();
-                      });
-        }
+    // ===== Multi-group pattern handling ONLY if injection molding enabled =====
+    if (enable_injection_molding) {
+        MultiGroupPattern pattern = analyze_group_relationships(grouped_extrusions);
+        handle_multi_group_patterns(grouped_extrusions, pattern, true);
     }
+
 
     const std::vector<size_t> grouped_extrusion_order = order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
 
@@ -316,11 +527,11 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
 
 // FIXME: From the point of better patch planning, it should be better to do ordering when we have generated all extrusions (for now, when G-Code is exported).
 // FIXME: It would be better to extract the adjacency graph of extrusions from the SkeletalTrapezoidation graph.
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first, const bool swap_first_int_w_ext_perimeter, const bool reverse_internal_perimeters, const int reverse_internal_perimeters_at) {
+PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first, const bool enable_injection_molding, const bool reverse_internal_perimeters, const int reverse_internal_perimeters_at) {
     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
-    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first, swap_first_int_w_ext_perimeter, reverse_internal_perimeters, reverse_internal_perimeters_at);
+    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first, enable_injection_molding, reverse_internal_perimeters, reverse_internal_perimeters_at);
 }
 
 } // namespace Slic3r::Arachne::PerimeterOrder

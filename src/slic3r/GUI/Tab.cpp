@@ -1477,7 +1477,9 @@ void TabPrint::build()
         optgroup->append_single_option_line("scarf_seam_max_segment_length", scarf_seam_path + "max-scarf-joint-segment-length");
         optgroup->append_single_option_line("scarf_seam_on_inner_perimeters", scarf_seam_path + "scarf-joint-on-inner-perimeters");
 
-        optgroup->append_single_option_line("swap_first_int_w_ext_perimeter", category_path + "swap_first_int_w_ext_perimeter");
+        optgroup->append_single_option_line("enable_injection_molding_order", category_path + "enable_injection_molding_order");
+        optgroup->append_single_option_line("enable_injection_molding_temp_boost", category_path + "enable_injection_molding_temp_boost");
+        optgroup->append_single_option_line("injection_molding_temp_boost", category_path + "injection_molding_temp_boost");
         optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse_internal_perimeters");
         optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse_internal_perimeters_at");
 

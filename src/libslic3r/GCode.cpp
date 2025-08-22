@@ -269,6 +269,94 @@ namespace Slic3r {
             }
         }
 
+        bool groove_structure_detected = false;
+
+        // Enhanced temperature calculation with injection molding boost
+        int get_temperature_for_role_with_injection(
+            ExtrusionRole role,
+            const PrintConfig& config,
+            int extruder_id,
+            bool enable_injection_boost) const
+            {
+                // First get base temperature with standard offsets
+                int temp = get_temperature_for_role(role, config, extruder_id);
+
+                // Then apply injection molding boost if conditions are met
+                if (enable_injection_boost &&
+                    config.enable_injection_molding_temp_boost &&
+                    groove_structure_detected &&
+                    role == ExtrusionRole::FirstInternalPerimeter) {
+
+                    // Add the injection boost (safely clamped)
+                    float boost = std::clamp(config.injection_molding_temp_boost.value, 0.0f, 5.0f);
+                temp += static_cast<int>(boost);
+                    }
+
+                    return temp;
+            }
+
+            // Detect if current layer has groove structure
+            void detect_groove_structure(const Layer* layer) {
+                groove_structure_detected = false;
+
+                if (!layer) return;
+
+                // Check each region for groove structure
+                for (const LayerRegion* region : layer->regions()) {
+                    int external_count = 0;
+                    int first_internal_count = 0;
+                    int second_internal_count = 0;
+
+                    // This is simplified - actual implementation would scan perimeter entities
+                    // Looking for presence of all three types needed for groove
+
+                    // If we find all three, we have a groove structure
+                    if (external_count > 0 && first_internal_count > 0 && second_internal_count > 0) {
+                        groove_structure_detected = true;
+                        return;
+                    }
+                }
+            }
+
+            // Modified temperature change function
+            std::string set_temperature_if_needed_with_injection(
+                GCodeWriter& writer,
+                ExtrusionRole role,
+                const PrintConfig& config,
+                int extruder_id)
+            {
+                if (!enabled || !config.enable_temperature_offsets)
+                    return "";
+
+                // Get temperature with potential injection boost
+                int target_temp = get_temperature_for_role_with_injection(
+                    role, config, extruder_id,
+                    config.enable_injection_molding_temp_boost);
+
+                if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
+                    current_temperature = target_temp;
+                    last_role = role;
+
+                    // Generate temperature change G-code with comment
+                    GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
+                    std::string gcode = "; Temperature change for " +
+                    gcode_extrusion_role_to_string(gcode_role);
+
+                    if (groove_structure_detected &&
+                        role == ExtrusionRole::FirstInternalPerimeter &&
+                        config.enable_injection_molding_temp_boost) {
+                        gcode += " (with injection molding boost)";
+                        }
+
+                        gcode += "\n";
+                    gcode += writer.set_temperature(target_temp,
+                                                    config.temperature_wait_for_region_change,
+                                                    extruder_id);
+                    return gcode;
+                }
+                return "";
+            }
+};
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {

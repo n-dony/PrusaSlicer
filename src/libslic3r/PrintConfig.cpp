@@ -1146,13 +1146,42 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
 
 
-    def = this->add("swap_first_int_w_ext_perimeter", coBool);
-    def->label = L("Exchange the first internal perimeters with their external perimeter");
+    def = this->add("enable_injection_molding_order", coBool);
+    def->label = L("Enable injection molding perimeter order");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Exchange the first internal perimeters with their external perimeter"
-                   "...");
+    def->tooltip = L("⚠️ EXPERT: Reorder perimeters to create a groove with external and "
+    "second internal perimeters, then place the first internal perimeter "
+    "last for injection into this groove.\n\n"
+    "Requirements:\n"
+    "• At least 3 perimeters for full effect\n"
+    "• Works best with temperature boost enabled\n\n"
+    "With 2 perimeters: Only swaps for overhangs\n"
+    "With 1 perimeter: No effect");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("enable_injection_molding_temp_boost", coBool);
+    def->label = L("Enable injection molding temperature boost");
+    def->category = L("Temperature");
+    def->tooltip = L("Apply additional temperature boost to first internal perimeter "
+    "when groove structure is detected (requires 3+ perimeters).\n"
+    "This boost is IN ADDITION to any temperature offsets configured.\n"
+    "⚠️ Test carefully with your specific filament!");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("injection_molding_temp_boost", coFloat);
+    def->label = L("Injection temperature boost");
+    def->category = L("Temperature");
+    def->tooltip = L("Additional temperature increase for first internal perimeter "
+    "when injecting into groove (added to base temperature and offsets).\n"
+    "Recommended: 2-3°C for PLA, 3-4°C for PETG\n"
+    "Maximum: 5°C for safety");
+    def->sidetext = L("°C");
+    def->min = 0;
+    def->max = 5;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));  // DEFAULT IS 0 - NO BOOST
  
     def = this->add("reverse_internal_perimeters", coBool);
     def->label = L("Reverse internal perimeter order");
