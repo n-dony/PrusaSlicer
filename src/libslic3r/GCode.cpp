@@ -233,46 +233,7 @@ namespace Slic3r {
             return base_temperature + static_cast<int>(offset);
         }
 
-
-    std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
-            GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)
-        {
-            if (!enabled || !config.enable_temperature_offsets)
-                return "";
-
-            int target_temp = get_temperature_for_role(role, config, extruder_id);
-
-            if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
-                current_temperature = target_temp;
-                last_role = role;
-
-                // Convert ExtrusionRole to GCodeExtrusionRole for string output
-                // Use the existing conversion function from ExtrusionRole.cpp
-                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
-
-                // Now use the string conversion function
-                std::string gcode = "; Temperature change for " + gcode_extrusion_role_to_string(gcode_role) + "\n";
-                gcode += writer.set_temperature(target_temp, config.temperature_wait_for_region_change, extruder_id);
-                return gcode;
-            }
-            return "";
-        }
-
-    void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
-        {
-            if (config.enable_temperature_offsets && extruder_id >= 0) {
-                enabled = true;
-                base_temperature = (layer_index == 0) ?
-                config.first_layer_temperature.get_at(extruder_id) :
-                config.temperature.get_at(extruder_id);
-                current_temperature = base_temperature;
-            }
-        }
-
-        bool groove_structure_detected = false;
-
-        // Enhanced temperature calculation with injection molding boost
-        int get_temperature_for_role_with_injection(
+        int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role_with_injection(
             ExtrusionRole role,
             const PrintConfig& config,
             int extruder_id,
@@ -296,7 +257,7 @@ namespace Slic3r {
             }
 
             // Detect if current layer has groove structure
-            void detect_groove_structure(const Layer* layer) {
+        void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
                 groove_structure_detected = false;
 
                 if (!layer) return;
@@ -319,7 +280,7 @@ namespace Slic3r {
             }
 
             // Modified temperature change function
-            std::string set_temperature_if_needed_with_injection(
+        std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed_with_injection(
                 GCodeWriter& writer,
                 ExtrusionRole role,
                 const PrintConfig& config,
@@ -356,7 +317,42 @@ namespace Slic3r {
                 }
                 return "";
             }
-};
+
+    std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
+            GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)
+        {
+            if (!enabled || !config.enable_temperature_offsets)
+                return "";
+
+            int target_temp = get_temperature_for_role(role, config, extruder_id);
+
+            if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
+                current_temperature = target_temp;
+                last_role = role;
+
+                // Convert ExtrusionRole to GCodeExtrusionRole for string output
+                // Use the existing conversion function from ExtrusionRole.cpp
+                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
+
+                // Now use the string conversion function
+                std::string gcode = "; Temperature change for " + gcode_extrusion_role_to_string(gcode_role) + "\n";
+                gcode += writer.set_temperature(target_temp, config.temperature_wait_for_region_change, extruder_id);
+                return gcode;
+            }
+            return "";
+        }
+
+    void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
+        {
+            if (config.enable_temperature_offsets && extruder_id >= 0) {
+                enabled = true;
+                base_temperature = (layer_index == 0) ?
+                config.first_layer_temperature.get_at(extruder_id) :
+                config.temperature.get_at(extruder_id);
+                current_temperature = base_temperature;
+            }
+        }
+
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
