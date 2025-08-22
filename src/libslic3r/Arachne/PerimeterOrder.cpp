@@ -275,6 +275,34 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
             std::reverse(grouped_extrusions.back().extrusions.begin(), grouped_extrusions.back().extrusions.end());
     }
 
+    // After the swap/reverse logic on all groups
+    if (swap_first_int_w_ext_perimeter) {
+        // Check for thin tube case
+        int groups_with_external = 0;
+        bool has_thin_group = false;
+
+        for (const auto& group : grouped_extrusions) {
+            if (group.external_perimeter_extrusion->is_external_perimeter()) {
+                groups_with_external++;
+                if (group.extrusions.size() <= 2) {  // External + maybe 1 internal
+                    has_thin_group = true;
+                }
+            }
+        }
+
+        // If we have a thin tube (multiple external groups with few perimeters)
+        if (groups_with_external > 1 && has_thin_group) {
+            // Override the holes-first ordering for thin tubes
+            // Sort to put contours before holes
+            std::sort(grouped_extrusions.begin(), grouped_extrusions.end(),
+                      [](const GroupedPerimeterExtrusions& a, const GroupedPerimeterExtrusions& b) {
+                          // Contours (true) before holes (false)
+                          return a.external_perimeter_extrusion->is_contour() >
+                          b.external_perimeter_extrusion->is_contour();
+                      });
+        }
+    }
+
     const std::vector<size_t> grouped_extrusion_order = order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
 
     PerimeterExtrusions ordered_extrusions;
