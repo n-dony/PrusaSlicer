@@ -79,7 +79,7 @@ static FILE* stl_open_count_facets(stl_file *stl, const char *file)
     	// Test if the STL file has the right size.
     	if (((file_size - HEADER_SIZE) % SIZEOF_STL_FACET != 0) || (file_size < STL_MIN_FILE_SIZE)) {
 			BOOST_LOG_TRIVIAL(error) << "stl_open_count_facets: The file " << file << " has the wrong size.";
-      		//fclose(fp);
+      		fclose(fp);
       		return nullptr;
     	}
     	num_facets = (file_size - HEADER_SIZE) / SIZEOF_STL_FACET;
@@ -109,7 +109,7 @@ static FILE* stl_open_count_facets(stl_file *stl, const char *file)
 		// do another null check to be safe
     	if (fp == nullptr) {
 			BOOST_LOG_TRIVIAL(error) << "stl_open_count_facets: Couldn't open " << file << " for reading";
-      		fclose(fp);
+      		//fclose(fp);
       		return nullptr;
     	}
     
