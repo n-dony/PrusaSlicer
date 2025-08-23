@@ -28,6 +28,14 @@ static size_t get_extrusion_lines_count(const Perimeters &perimeters) {
     return extrusion_lines_count;
 }
 
+
+inline Point get_end_position(const ExtrusionLine &extrusion) {
+    if (extrusion.is_closed)
+        return extrusion.junctions[0].p; // We ended where we started.
+    else
+        return extrusion.junctions.back().p; // Pick the other end from where we started.
+}
+
 static PerimeterExtrusions get_sorted_perimeter_extrusions_by_area(const Perimeters &perimeters) {
     PerimeterExtrusions sorted_perimeter_extrusions;
     sorted_perimeter_extrusions.reserve(get_extrusion_lines_count(perimeters));
@@ -341,12 +349,6 @@ static void assign_nearest_external_perimeter(PerimeterExtrusions &sorted_perime
     }
 }
 
-inline Point get_end_position(const ExtrusionLine &extrusion) {
-    if (extrusion.is_closed)
-        return extrusion.junctions[0].p; // We ended where we started.
-    else
-        return extrusion.junctions.back().p; // Pick the other end from where we started.
-}
 
 // Returns ordered extrusions.
 static std::vector<const PerimeterExtrusion *> ordered_perimeter_extrusions_to_minimize_distances(Point current_position, std::vector<const PerimeterExtrusion *> extrusions) {
