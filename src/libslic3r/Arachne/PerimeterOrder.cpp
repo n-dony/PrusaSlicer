@@ -10,6 +10,16 @@ namespace Slic3r::Arachne::PerimeterOrder {
 
 using namespace Arachne;
 
+struct GroupedPerimeterExtrusions
+{
+    GroupedPerimeterExtrusions() = delete;
+    explicit GroupedPerimeterExtrusions(const PerimeterExtrusion *external_perimeter_extrusion)
+        : external_perimeter_extrusion(external_perimeter_extrusion) {}
+
+    std::vector<const PerimeterExtrusion *> extrusions;
+    const PerimeterExtrusion               *external_perimeter_extrusion  = nullptr;
+};
+
 static size_t get_extrusion_lines_count(const Perimeters &perimeters) {
     size_t extrusion_lines_count = 0;
     for (const Perimeter &perimeter : perimeters)
@@ -376,15 +386,7 @@ static std::vector<const PerimeterExtrusion *> ordered_perimeter_extrusions_to_m
     return ordered_extrusions;
 }
 
-struct GroupedPerimeterExtrusions
-{
-    GroupedPerimeterExtrusions() = delete;
-    explicit GroupedPerimeterExtrusions(const PerimeterExtrusion *external_perimeter_extrusion)
-        : external_perimeter_extrusion(external_perimeter_extrusion) {}
 
-    std::vector<const PerimeterExtrusion *> extrusions;
-    const PerimeterExtrusion               *external_perimeter_extrusion  = nullptr;
-};
 
 // Returns vector of indexes that represent the order of grouped extrusions in grouped_extrusions.
 static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_distances(const std::vector<GroupedPerimeterExtrusions> &grouped_extrusions, Point current_position) {

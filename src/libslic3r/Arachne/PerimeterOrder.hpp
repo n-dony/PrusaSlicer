@@ -83,4 +83,4 @@ PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, b
 
 } // namespace Slic3r::Arachne::PerimeterOrder
 
-#endif // slic3r_GCode_Travels_hpp_
+#endif // slic3r_GCode_PerimeterOrder_hpp_
