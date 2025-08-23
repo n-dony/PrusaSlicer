@@ -718,6 +718,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 enable_injection_molding_order))
     ((ConfigOptionBool,                 enable_injection_molding_temp_boost))
     ((ConfigOptionFloat,                injection_molding_temp_boost))
+    ((ConfigOptionFloat,                temperature_preheat_time))
     ((ConfigOptionBool,                 reverse_internal_perimeters))
     ((ConfigOptionInt,                  reverse_internal_perimeters_at))
     ((ConfigOptionBool,                 external_perimeters_first))

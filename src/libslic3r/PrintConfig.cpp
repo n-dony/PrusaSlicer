@@ -1183,6 +1183,19 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0));  // DEFAULT IS 0 - NO BOOST
  
+    def = this->add("temperature_preheat_time", coFloat);
+    def->label = L("Temperature preheat time");
+    def->category = L("Temperature");
+    def->tooltip = L("Time in milliseconds to insert temperature change commands "
+                    "before they are needed. This compensates for thermal lag when "
+                    "the hotend needs time to reach the target temperature. "
+                    "For injection molding, 3000-5000ms is typically recommended.");
+    def->sidetext = L("ms");
+    def->min = 0;
+    def->max = 10000;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));  
+
     def = this->add("reverse_internal_perimeters", coBool);
     def->label = L("Reverse internal perimeter order");
     def->category = L("Layers and Perimeters");
