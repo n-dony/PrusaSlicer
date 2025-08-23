@@ -461,9 +461,7 @@ private:
         int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,const PrintRegionConfig* region_config,
                                                     int extruder_id) const;
         void detect_groove_structure(const Layer* layer);
-        std::string set_temperature_if_needed_with_injection(GCodeWriter& writer, ExtrusionRole role,
-                                                             const PrintConfig& config, int extruder_id);
-
+        
         bool should_change_temperature(int new_temp, float threshold) const {
             return std::abs(new_temp - current_temperature) >= threshold;
         }
