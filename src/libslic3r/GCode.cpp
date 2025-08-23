@@ -248,8 +248,7 @@ namespace Slic3r {
                     groove_structure_detected &&
                     role == ExtrusionRole::FirstInternalPerimeter) {
                     
-                    float boost = std::clamp(region_config->injection_molding_temp_boost.value, 0.0f, 5.0f);
-                    temp += static_cast<int>(boost);
+                    temp += std::clamp(static_cast<int>(region_config->injection_molding_temp_boost.value), 0, 5);
                 }
                 
                 return temp;
