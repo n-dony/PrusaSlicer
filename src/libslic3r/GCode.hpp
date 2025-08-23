@@ -170,6 +170,7 @@ public:
     using ObjectsLayerToPrint = GCode::ObjectsLayerToPrint;
 
     std::optional<Point> last_position;
+    
 
 private:
     using InstanceToPrint = GCode::InstanceToPrint;
@@ -435,6 +436,7 @@ private:
     bool                                m_object_layer_over_raft;
     double                              m_volumetric_speed;
     // Support for the extrusion role markers. Which marker is active?
+    const PrintRegion*                  m_current_region;
     GCodeExtrusionRole                  m_last_extrusion_role;
     // Support for G-Code Processor
     float                               m_last_height{ 0.0f };
@@ -456,28 +458,32 @@ private:
         int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
 
         // Add these new member function declarations
-        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,
-                                                    int extruder_id, bool enable_injection_boost) const;
-                                                    void detect_groove_structure(const Layer* layer);
-                                                    std::string set_temperature_if_needed_with_injection(GCodeWriter& writer, ExtrusionRole role,
-                                                                                                         const PrintConfig& config, int extruder_id);
+        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,const PrintRegionConfig* region_config,
+                                                    int extruder_id) const;
+        void detect_groove_structure(const Layer* layer);
+        std::string set_temperature_if_needed_with_injection(GCodeWriter& writer, ExtrusionRole role,
+                                                             const PrintConfig& config, int extruder_id);
 
-                                                    bool should_change_temperature(int new_temp, float threshold) const {
-                                                        return std::abs(new_temp - current_temperature) >= threshold;
-                                                    }
+        bool should_change_temperature(int new_temp, float threshold) const {
+            return std::abs(new_temp - current_temperature) >= threshold;
+        }
 
-                                                    std::string set_temperature_if_needed(GCodeWriter& writer, ExtrusionRole role,
-                                                                                          const PrintConfig& config, int extruder_id);
+        std::string set_temperature_if_needed(
+            GCodeWriter& writer, 
+            ExtrusionRole role,
+            const PrintConfig& config,
+            const PrintRegionConfig* region_config,  // Optional region config
+            int extruder_id);
+        
+        void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
 
-                                                    void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
-
-                                                    void reset() {
-                                                        base_temperature = 0;
-                                                        current_temperature = 0;
-                                                        last_role = ExtrusionRole::None;
-                                                        enabled = false;
-                                                        groove_structure_detected = false;  // Add this
-                                                    }
+        void reset() {
+            base_temperature = 0;
+            current_temperature = 0;
+            last_role = ExtrusionRole::None;
+            enabled = false;
+            groove_structure_detected = false;  // Add this
+        }
     };
     
     RegionTemperatureManager m_temperature_manager;

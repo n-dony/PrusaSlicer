@@ -233,27 +233,26 @@ namespace Slic3r {
             return base_temperature + static_cast<int>(offset);
         }
 
-        int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role_with_injection(
+    int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role_with_injection(
             ExtrusionRole role,
-            const PrintConfig& config,
-            int extruder_id,
-            bool enable_injection_boost) const
+            const PrintConfig& config,const PrintRegionConfig* region_config,
+            int extruder_id) const
             {
                 // First get base temperature with standard offsets
                 int temp = get_temperature_for_role(role, config, extruder_id);
 
                 // Then apply injection molding boost if conditions are met
-                if (enable_injection_boost &&
-                    config.enable_injection_molding_temp_boost &&
+                // Apply injection molding boost if all conditions are met
+                if (region_config &&
+                    region_config->enable_injection_molding_temp_boost &&
                     groove_structure_detected &&
                     role == ExtrusionRole::FirstInternalPerimeter) {
-
-                    // Add the injection boost (safely clamped)
-                    float boost = std::clamp(config.injection_molding_temp_boost.value, 0.0f, 5.0f);
-                temp += static_cast<int>(boost);
-                    }
-
-                    return temp;
+                    
+                    float boost = std::clamp(region_config->injection_molding_temp_boost.value, 0.0f, 5.0f);
+                    temp += static_cast<int>(boost);
+                }
+                
+                return temp;
             }
 
             // Detect if current layer has groove structure
@@ -280,43 +279,45 @@ namespace Slic3r {
             }
 
             // Modified temperature change function
-        std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed_with_injection(
-                GCodeWriter& writer,
-                ExtrusionRole role,
-                const PrintConfig& config,
-                int extruder_id)
-            {
-                if (!enabled || !config.enable_temperature_offsets)
-                    return "";
-
-                // Get temperature with potential injection boost
-                int target_temp = get_temperature_for_role_with_injection(
-                    role, config, extruder_id,
-                    config.enable_injection_molding_temp_boost);
-
-                if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
-                    current_temperature = target_temp;
-                    last_role = role;
-
-                    // Generate temperature change G-code with comment
-                    GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
-                    std::string gcode = "; Temperature change for " +
-                    gcode_extrusion_role_to_string(gcode_role);
-
-                    if (groove_structure_detected &&
-                        role == ExtrusionRole::FirstInternalPerimeter &&
-                        config.enable_injection_molding_temp_boost) {
-                        gcode += " (with injection molding boost)";
-                        }
-
-                        gcode += "\n";
-                    gcode += writer.set_temperature(target_temp,
-                                                    config.temperature_wait_for_region_change,
-                                                    extruder_id);
-                    return gcode;
-                }
+        std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
+            GCodeWriter& writer,
+            ExtrusionRole role,
+            const PrintConfig& config,
+            const PrintRegionConfig* region_config,
+            int extruder_id)
+        {
+            if (!enabled || !config.enable_temperature_offsets)
                 return "";
+            
+            // Calculate target temperature with optional injection molding boost
+            int target_temp = get_temperature_for_role_with_injection(
+                role, config, region_config, extruder_id);
+            
+            if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
+                current_temperature = target_temp;
+                last_role = role;
+                
+                // Generate G-code with appropriate comment
+                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
+                std::string gcode = "; Temperature change for " +
+                    gcode_extrusion_role_to_string(gcode_role);
+                
+                // Add injection molding note if applicable
+                if (region_config &&
+                    region_config->enable_injection_molding_temp_boost &&
+                    groove_structure_detected &&
+                    role == ExtrusionRole::FirstInternalPerimeter) {
+                    gcode += " (with injection molding boost)";
+                }
+                
+                gcode += "\n";
+                gcode += writer.set_temperature(target_temp,
+                                               config.temperature_wait_for_region_change,
+                                               extruder_id);
+                return gcode;
             }
+            return "";
+        }
 
     std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
             GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)
@@ -3334,20 +3335,31 @@ std::string GCodeGenerator::extrude_infill_ranges(
 std::string GCodeGenerator::extrude_perimeters(
     const PrintRegion &region,
     const std::vector<GCode::ExtrusionOrder::Perimeter> &perimeters,
-    const InstanceToPrint &print_instance
-) {
+    const InstanceToPrint &print_instance ) {
+    
     if (!perimeters.empty()) {
+        // Apply this region's configuration to the generator's working config
         m_config.apply(region.config());
+        
+        // Track which region we're currently processing
+        m_current_region = &region;
+        
+        // Detect groove structure if injection molding is enabled for this region
+        if (region.config().enable_injection_molding_temp_boost && m_layer) {
+            m_temperature_manager.detect_groove_structure(m_layer);
+        }
     }
 
     std::string gcode{};
 
     for (const GCode::ExtrusionOrder::Perimeter &perimeter : perimeters) {
         double speed{-1};
-        // Apply the small perimeter speed.
         if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)
             speed = m_config.small_perimeter_speed.get_abs_value(m_config.perimeter_speed);
-        gcode += this->extrude_smooth_path(perimeter.smooth_path, perimeter.extrusion_entity->is_loop(), comment_perimeter, speed, perimeter.wipe_offset);
+            
+        gcode += this->extrude_smooth_path(perimeter.smooth_path, 
+                                          perimeter.extrusion_entity->is_loop(), 
+                                          comment_perimeter, speed, perimeter.wipe_offset);
         this->m_travel_obstacle_tracker.mark_extruded(
             perimeter.extrusion_entity, print_instance.object_layer_to_print_id, print_instance.instance_id
         );
@@ -3648,8 +3660,16 @@ std::string GCodeGenerator::_extrude(
     
     // Add temperature management for region changes
     if (m_config.enable_temperature_offsets && m_writer.extruder()) {
+        // Pass the current region config (if available) for injection molding settings
+        const PrintRegionConfig* region_config = m_current_region ? 
+            &(m_current_region->config()) : nullptr;
+        
         gcode += m_temperature_manager.set_temperature_if_needed(
-            m_writer, path_attr.role, m_config, m_writer.extruder()->id()
+            m_writer, 
+            path_attr.role, 
+            m_config,
+            region_config,  // May be nullptr if no region is set
+            m_writer.extruder()->id()
         );
     }
     
