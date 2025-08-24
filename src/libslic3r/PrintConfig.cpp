@@ -1815,6 +1815,21 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("temperature_preheat_time", coFloat);
+    def->label = L("Temperature preheat time");
+    def->category = L("Temperature");
+    def->tooltip = L("Time in milliseconds to insert temperature change commands "
+                    "before they are needed. This compensates for thermal lag when "
+                    "the hotend needs time to reach the target temperature.\n\n"
+                    "• For standard printing: 1000-2000ms\n"
+                    "• For injection molding: 3000-5000ms\n"
+                    "• Set to 0 to disable look-ahead (immediate temperature changes)");
+    def->sidetext = L("ms");
+    def->min = 0;
+    def->max = 10000;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));  // Default 0 = disabled
+
     def = this->add("external_perimeter_temperature_offset", coFloats);
     def->label = L("External perimeter");
     def->category = L("Temperature offsets");

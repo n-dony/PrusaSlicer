@@ -514,6 +514,7 @@ static std::vector<std::string> s_Preset_print_options {
     "bed_temperature_extruder", "interlocking_beam", "interlocking_orientation", "interlocking_beam_layer_count", "interlocking_depth", "interlocking_boundary_avoidance", "interlocking_beam_width","enable_temperature_offsets",
     "temperature_change_threshold",
     "temperature_wait_for_region_change",
+    "temperature_preheat_time",
     "external_perimeter_temperature_offset",
     "first_internal_perimeter_temperature_offset",
     "second_internal_perimeter_temperature_offset",

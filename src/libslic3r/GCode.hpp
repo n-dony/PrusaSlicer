@@ -453,35 +453,37 @@ private:
         int current_temperature = 0;
         ExtrusionRole last_role = ExtrusionRole::None;
         bool enabled = false;
-        bool groove_structure_detected = false;  // Add this member variable
-
+        bool groove_structure_detected = false;
+        
+        // Temperature look-ahead buffer
+        struct BufferedLine {
+            std::string gcode;
+            float time_ms;  // Duration in milliseconds
+            ExtrusionRole role;
+            int target_temp;
+            bool temp_change_inserted;
+        };
+        
+        std::deque<BufferedLine> line_buffer;
+        float buffer_time_ms = 0.0f;
+        float accumulated_time_ms = 0.0f;
+        
+        // Existing methods
         int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
-
-        // Add these new member function declarations
-        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,const PrintRegionConfig* region_config,
-                                                    int extruder_id) const;
+        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config, 
+                                                   int extruder_id, bool enable_injection_boost) const;
         void detect_groove_structure(const Layer* layer);
         
-        bool should_change_temperature(int new_temp, float threshold) const {
-            return std::abs(new_temp - current_temperature) >= threshold;
-        }
-
-        std::string set_temperature_if_needed(
-            GCodeWriter& writer, 
-            ExtrusionRole role,
-            const PrintConfig& config,
-            const PrintRegionConfig* region_config,  // Optional region config
-            int extruder_id);
+        // New buffering methods
+        void buffer_line(const std::string& gcode, float time_ms, ExtrusionRole role, int target_temp);
+        std::string process_buffer(GCodeWriter& writer, const PrintConfig& config, 
+                                  int extruder_id, float preheat_time_ms, bool force_flush = false);
+        
+        std::string set_temperature_if_needed(GCodeWriter& writer, ExtrusionRole role, 
+                                             const PrintConfig& config, int extruder_id);
         
         void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
-
-        void reset() {
-            base_temperature = 0;
-            current_temperature = 0;
-            last_role = ExtrusionRole::None;
-            enabled = false;
-            groove_structure_detected = false;  // Add this
-        }
+        void reset();
     };
     
     RegionTemperatureManager m_temperature_manager;

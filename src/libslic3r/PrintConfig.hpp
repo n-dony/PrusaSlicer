@@ -965,6 +965,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionBool,           enable_temperature_offsets))
     ((ConfigOptionFloat,          temperature_change_threshold))
     ((ConfigOptionBool,           temperature_wait_for_region_change))
+    ((ConfigOptionFloat,          temperature_preheat_time))
     ((ConfigOptionFloats,         external_perimeter_temperature_offset))
     ((ConfigOptionFloats,         first_internal_perimeter_temperature_offset))
     ((ConfigOptionFloats,         second_internal_perimeter_temperature_offset))

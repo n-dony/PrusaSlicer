@@ -277,46 +277,93 @@ namespace Slic3r {
                 }
             }
 
-            // Modified temperature change function
+    void GCodeGenerator::RegionTemperatureManager::buffer_line(
+        const std::string& gcode, float time_ms, ExtrusionRole role, int target_temp) 
+    {
+        BufferedLine line;
+        line.gcode = gcode;
+        line.time_ms = time_ms;
+        line.role = role;
+        line.target_temp = target_temp;
+        line.temp_change_inserted = false;
+
+        line_buffer.push_back(line);
+        buffer_time_ms += time_ms;
+    }
+
+    std::string GCodeGenerator::RegionTemperatureManager::process_buffer(
+        GCodeWriter& writer, const PrintConfig& config, int extruder_id, 
+        float preheat_time_ms, bool force_flush) 
+    {
+        std::string output;
+
+        // Process buffer when we have enough look-ahead or when forced
+        while ((buffer_time_ms > preheat_time_ms * 2 || force_flush) && !line_buffer.empty()) {
+            BufferedLine& front = line_buffer.front();
+
+            // Check for upcoming temperature changes
+            float time_to_future = 0;
+            for (auto& future_line : line_buffer) {
+                time_to_future += future_line.time_ms;
+
+                // Check if this future line needs different temperature
+                if (!future_line.temp_change_inserted && 
+                    std::abs(future_line.target_temp - current_temperature) >= config.temperature_change_threshold) {
+                    
+                    // Should we insert temperature change now?
+                    if (time_to_future <= preheat_time_ms) {
+                        // Insert temperature change NOW for future move
+                        output += "; Temperature pre-heat for ";
+                        output += gcode_extrusion_role_to_string(
+                            extrusion_role_to_gcode_extrusion_role(future_line.role));
+                        output += " in " + std::to_string(int(time_to_future)) + "ms\n";
+                        output += writer.set_temperature(future_line.target_temp, false, extruder_id);
+                        
+                        current_temperature = future_line.target_temp;
+                        future_line.temp_change_inserted = true;
+                        break; // Only one temperature change per line
+                    }
+                }
+            }
+
+            // Output the front line
+            output += front.gcode;
+
+            // Update buffer state
+            buffer_time_ms -= front.time_ms;
+            accumulated_time_ms += front.time_ms;
+            line_buffer.pop_front();
+        }
+
+        return output;
+    }
+
+    // Modified set_temperature_if_needed to work with buffering
     std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
-            GCodeWriter& writer,
-            ExtrusionRole role,
-            const PrintConfig& config,
-            const PrintRegionConfig* region_config,
-            int extruder_id)
-        {
-            if (!enabled || !config.enable_temperature_offsets)
-                return "";
-            
-            // Calculate target temperature with optional injection molding boost
-            int target_temp = get_temperature_for_role_with_injection(
-                role, config, region_config, extruder_id);
-            
+        GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id) 
+    {
+        if (!enabled || !config.enable_temperature_offsets)
+            return "";
+
+        // Get target temperature with injection molding boost if enabled
+        int target_temp = get_temperature_for_role_with_injection(
+            role, config, extruder_id, config.enable_injection_molding_temp_boost);
+        
+        // If look-ahead is disabled, use immediate temperature change
+        if (config.temperature_preheat_time.value <= 0) {
             if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
                 current_temperature = target_temp;
-                last_role = role;
-                
-                // Generate G-code with appropriate comment
-                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
-                std::string gcode = "; Temperature change for " +
-                    gcode_extrusion_role_to_string(gcode_role);
-                
-                // Add injection molding note if applicable
-                if (region_config &&
-                    region_config->enable_injection_molding_temp_boost &&
-                    groove_structure_detected &&
-                    role == ExtrusionRole::FirstInternalPerimeter) {
-                    gcode += " (with injection molding boost)";
-                }
-                
-                gcode += "\n";
-                gcode += writer.set_temperature(target_temp,
-                                               config.temperature_wait_for_region_change,
-                                               extruder_id);
+                std::string gcode = "; Temperature change for " + 
+                    gcode_extrusion_role_to_string(extrusion_role_to_gcode_extrusion_role(role)) + "\n";
+                gcode += writer.set_temperature(target_temp, 
+                    config.temperature_wait_for_region_change, extruder_id);
                 return gcode;
             }
-            return "";
         }
+
+        // Look-ahead is enabled, temperature will be handled by buffer
+        return "";
+    }
 
 
     void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
@@ -330,6 +377,52 @@ namespace Slic3r {
             }
         }
 
+std::string GCodeGenerator::extrude_with_lookahead(
+    const std::string& extrusion_gcode,
+    ExtrusionRole role,
+    float distance_mm,
+    float speed_mm_s) 
+{
+    // If look-ahead disabled, return immediately
+    if (m_config.temperature_preheat_time.value <= 0) {
+        return extrusion_gcode;
+    }
+    
+    // Calculate move duration using simple trapezoid profile
+    float acceleration = m_config.default_acceleration.value;
+    float time_ms = 0;
+    
+    if (acceleration > 0) {
+        float accel_time = speed_mm_s / acceleration;
+        float accel_distance = 0.5f * acceleration * accel_time * accel_time;
+        
+        if (2 * accel_distance > distance_mm) {
+            // Triangle profile
+            time_ms = 2000.0f * std::sqrt(distance_mm / acceleration);
+        } else {
+            // Trapezoid profile
+            float cruise_distance = distance_mm - 2 * accel_distance;
+            float cruise_time = cruise_distance / speed_mm_s;
+            time_ms = (2 * accel_time + cruise_time) * 1000.0f;
+        }
+    } else {
+        // No acceleration limit
+        time_ms = (distance_mm / speed_mm_s) * 1000.0f;
+    }
+    
+    // Get target temperature for this role
+    int target_temp = m_temperature_manager.get_temperature_for_role_with_injection(
+        role, m_config, m_writer.extruder()->id(), 
+        m_config.enable_injection_molding_temp_boost);
+    
+    // Buffer the line
+    m_temperature_manager.buffer_line(extrusion_gcode, time_ms, role, target_temp);
+    
+    // Process buffer and return any G-code that should be emitted now
+    return m_temperature_manager.process_buffer(
+        m_writer, m_config, m_writer.extruder()->id(), 
+        m_config.temperature_preheat_time.value, false);
+}
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
@@ -3164,6 +3257,14 @@ std::string GCodeGenerator::change_layer(
     const bool first_layer
 ) {
     std::string gcode;
+    
+    if (m_config.temperature_preheat_time.value > 0 && 
+        m_config.enable_temperature_offsets) {
+        gcode += m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            m_config.temperature_preheat_time.value, true);  // force_flush = true
+    }
+
     if (m_layer_count > 0)
         // Increment a progress bar indicator.
         gcode += m_writer.update_progress(++ m_layer_index, m_layer_count);
@@ -3227,6 +3328,13 @@ std::string GCodeGenerator::extrude_smooth_path(
 ) {
     std::string gcode;
 
+        // Get the role from first element
+    ExtrusionRole role = smooth_path.empty() ? ExtrusionRole::None : 
+                        smooth_path.front().path_attributes.role;
+    // Generate the extrusion G-code as usual
+    std::string path_gcode;
+    float total_distance = 0;
+
     // Extrude along the smooth path.
     bool          is_bridge_extruded = false;
     EmitModifiers emit_modifiers     = EmitModifiers::create_with_disabled_emits();
@@ -3272,7 +3380,28 @@ std::string GCodeGenerator::extrude_smooth_path(
         GCode::reverse(reversed_smooth_path);
         m_wipe.set_path(std::move(reversed_smooth_path));
     }
-
+    if (m_config.temperature_preheat_time.value > 0 && 
+        m_config.enable_temperature_offsets) {
+        // Calculate actual speed (may have been modified)
+        float actual_speed = speed > 0 ? speed : 
+            [this, role]() -> float {
+                // Get speed based on role (simplified)
+                if (role == ExtrusionRole::ExternalPerimeter)
+                    return m_config.external_perimeter_speed.value;
+                else if (role == ExtrusionRole::Perimeter)
+                    return m_config.perimeter_speed.value;
+                // ... etc for other roles
+                return m_config.default_speed.value;
+            }();
+        
+        gcode = extrude_with_lookahead(path_gcode, role, 
+                                      total_distance, actual_speed / 60.0f);
+    } else {
+        // Original path: check temperature immediately
+        gcode = m_temperature_manager.set_temperature_if_needed(
+            m_writer, role, m_config, m_writer.extruder()->id());
+        gcode += path_gcode;
+    }
     return gcode;
 }
 
@@ -4064,7 +4193,7 @@ std::string GCodeGenerator::retract_and_wipe(bool toolchange, bool reset_e)
     return gcode;
 }
 
-std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_z)
+(unsigned int extruder_id, double print_z)
 {
     if (!m_writer.need_toolchange(extruder_id))
         return "";

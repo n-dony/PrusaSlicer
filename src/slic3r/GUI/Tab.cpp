@@ -1480,6 +1480,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("enable_injection_molding_order", category_path + "enable_injection_molding_order");
         optgroup->append_single_option_line("enable_injection_molding_temp_boost", category_path + "enable_injection_molding_temp_boost");
         optgroup->append_single_option_line("injection_molding_temp_boost", category_path + "injection_molding_temp_boost");
+        optgroup->append_single_option_line("temperature_preheat_time", category_path + "temperature_preheat_time");
         optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse_internal_perimeters");
         optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse_internal_perimeters_at");
 
