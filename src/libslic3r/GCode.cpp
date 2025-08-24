@@ -3395,8 +3395,21 @@ std::string GCodeGenerator::extrude_smooth_path(
                     return m_config.external_perimeter_speed.value;
                 else if (role == ExtrusionRole::Perimeter)
                     return m_config.perimeter_speed.value;
-                // ... etc for other roles
-                return m_config.default_speed.value;
+                else if (role == ExtrusionRole::Infill)
+                    return m_config.infill_speed.value;
+                else if (role == ExtrusionRole::SolidInfill)
+                    return m_config.solid_infill_speed.value;
+                else if (role == ExtrusionRole::TopSolidInfill)
+                    return m_config.top_solid_infill_speed.value;
+                else if (role == ExtrusionRole::SupportMaterial)
+                    return m_config.support_material_speed.value;
+                else if (role == ExtrusionRole::Bridge)
+                    return m_config.bridge_speed.value;
+                else if (role == ExtrusionRole::GapFill)
+                    return m_config.gap_fill_speed.value;
+            
+            // Fallback to a default if role is not handled
+            return m_config.default_speed.value;
             }();
         
         gcode = extrude_with_lookahead(path_gcode, role, 
@@ -4199,7 +4212,6 @@ std::string GCodeGenerator::retract_and_wipe(bool toolchange, bool reset_e)
 }
 
 std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_z)
-{
 {
     if (!m_writer.need_toolchange(extruder_id))
         return "";
