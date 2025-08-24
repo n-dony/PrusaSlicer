@@ -170,7 +170,7 @@ public:
     using ObjectsLayerToPrint = GCode::ObjectsLayerToPrint;
 
     std::optional<Point> last_position;
-    
+    std::string extrude_with_lookahead(const std::string& extrusion_gcode,ExtrusionRole role, float distance_mm, float speed_mm_s);
 
 private:
     using InstanceToPrint = GCode::InstanceToPrint;
@@ -454,7 +454,7 @@ private:
         ExtrusionRole last_role = ExtrusionRole::None;
         bool enabled = false;
         bool groove_structure_detected = false;
-        
+
         // Temperature look-ahead buffer
         struct BufferedLine {
             std::string gcode;
@@ -463,11 +463,11 @@ private:
             int target_temp;
             bool temp_change_inserted;
         };
-        
+
         std::deque<BufferedLine> line_buffer;
         float buffer_time_ms = 0.0f;
         float accumulated_time_ms = 0.0f;
-        
+
         // Existing methods
         int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
         int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config, 
@@ -553,6 +553,8 @@ private:
     friend class GCode::WipeTowerIntegration;
     friend class PressureEqualizer;
 };
+
+
 
 std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Print& print);
 

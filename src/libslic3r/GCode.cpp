@@ -412,9 +412,12 @@ std::string GCodeGenerator::extrude_with_lookahead(
     
     // Get target temperature for this role
     int target_temp = m_temperature_manager.get_temperature_for_role_with_injection(
-        role, m_config, m_writer.extruder()->id(), 
-        m_config.enable_injection_molding_temp_boost);
-    
+
+    role, m_config, 
+
+    m_current_region ? &m_current_region->config() : nullptr,
+
+    m_writer.extruder()->id());    
     // Buffer the line
     m_temperature_manager.buffer_line(extrusion_gcode, time_ms, role, target_temp);
     
