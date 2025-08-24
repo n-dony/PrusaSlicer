@@ -462,6 +462,7 @@ private:
             ExtrusionRole role;
             int target_temp;
             bool temp_change_inserted;
+            BufferedLine() : role(ExtrusionRole::None), temp_change_inserted(false) {}
         };
 
         std::deque<BufferedLine> line_buffer;
@@ -470,7 +471,7 @@ private:
 
         // Existing methods
         int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
-        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config, 
+        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,const PrintRegionConfig* region_config, 
                                                    int extruder_id, bool enable_injection_boost) const;
         void detect_groove_structure(const Layer* layer);
         

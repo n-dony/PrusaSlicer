@@ -1207,7 +1207,8 @@ void PrintConfigDef::init_fff_params()
     def = this->add("reverse_internal_perimeters_at", coInt);
     def->label = L("Reverse internal perimeters starting at");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("");
+    def->tooltip = L("Perimeter depth at which to start reversing internal perimeters. "
+                 "For example, 2 means reverse starting from the second internal perimeter.");
     def->sidetext = L("");
     def->min = 0;
     def->max = 10000;

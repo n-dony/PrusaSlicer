@@ -340,14 +340,14 @@ namespace Slic3r {
 
     // Modified set_temperature_if_needed to work with buffering
     std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
-        GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id) 
+        GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, const PrintRegionConfig& region_config, int extruder_id) 
     {
         if (!enabled || !config.enable_temperature_offsets)
             return "";
 
         // Get target temperature with injection molding boost if enabled
         int target_temp = get_temperature_for_role_with_injection(
-            role, config, extruder_id, config.enable_injection_molding_temp_boost);
+            role, config,region_config, extruder_id, config.enable_injection_molding_temp_boost);
         
         // If look-ahead is disabled, use immediate temperature change
         if (config.temperature_preheat_time.value <= 0) {
@@ -384,7 +384,7 @@ std::string GCodeGenerator::extrude_with_lookahead(
     float speed_mm_s) 
 {
     // If look-ahead disabled, return immediately
-    if (m_config.temperature_preheat_time.value <= 0) {
+    if (m_current_region && m_current_region->config().temperature_preheat_time.value <= 0) {
         return extrusion_gcode;
     }
     
@@ -424,7 +424,8 @@ std::string GCodeGenerator::extrude_with_lookahead(
     // Process buffer and return any G-code that should be emitted now
     return m_temperature_manager.process_buffer(
         m_writer, m_config, m_writer.extruder()->id(), 
-        m_config.temperature_preheat_time.value, false);
+        m_current_region ? m_current_region->config().temperature_preheat_time.value : 0, 
+        false);
 }
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
@@ -3261,11 +3262,12 @@ std::string GCodeGenerator::change_layer(
 ) {
     std::string gcode;
     
-    if (m_config.temperature_preheat_time.value > 0 && 
+    if (m_current_region && 
+        m_current_region->config().temperature_preheat_time.value > 0 && 
         m_config.enable_temperature_offsets) {
         gcode += m_temperature_manager.process_buffer(
             m_writer, m_config, m_writer.extruder()->id(), 
-            m_config.temperature_preheat_time.value, true);  // force_flush = true
+            m_current_region->config().temperature_preheat_time.value, true);
     }
 
     if (m_layer_count > 0)
@@ -4196,7 +4198,8 @@ std::string GCodeGenerator::retract_and_wipe(bool toolchange, bool reset_e)
     return gcode;
 }
 
-(unsigned int extruder_id, double print_z)
+std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_z)
+{
 {
     if (!m_writer.need_toolchange(extruder_id))
         return "";
