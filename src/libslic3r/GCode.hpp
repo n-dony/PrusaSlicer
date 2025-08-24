@@ -481,7 +481,7 @@ private:
                                   int extruder_id, float preheat_time_ms, bool force_flush = false);
         
         std::string set_temperature_if_needed(GCodeWriter& writer, ExtrusionRole role, 
-                                             const PrintConfig& config, int extruder_id);
+                                             const PrintConfig& config,const PrintRegionConfig* region_config, int extruder_id);
         
         void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
         void reset();

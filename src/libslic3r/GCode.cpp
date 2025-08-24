@@ -3417,7 +3417,7 @@ std::string GCodeGenerator::extrude_smooth_path(
     } else {
         // Original path: check temperature immediately
         gcode = m_temperature_manager.set_temperature_if_needed(
-            m_writer, role, m_config, m_writer.extruder()->id());
+            m_writer, role, m_config, region_config, m_writer.extruder()->id());
         gcode += path_gcode;
     }
     return gcode;
