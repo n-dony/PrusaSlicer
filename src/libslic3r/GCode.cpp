@@ -347,7 +347,7 @@ namespace Slic3r {
 
         // Get target temperature with injection molding boost if enabled
         int target_temp = get_temperature_for_role_with_injection(
-            role, config,region_config, extruder_id, config.enable_injection_molding_temp_boost);
+            role, config,region_config, extruder_id);
         
         // If look-ahead is disabled, use immediate temperature change
         if (config.temperature_preheat_time.value <= 0) {
