@@ -794,14 +794,6 @@ WipeTower::ToolChangeResult WipeTower::tool_change(size_t tool)
 
     float wipe_area = 0.f;
 	float wipe_volume = 0.f;
-	
-    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
-    if (region_config && region_config->temperature_preheat_time.value > 0) {
-        gcode += m_temperature_manager.process_buffer(
-            m_writer, m_config, m_writer.extruder()->id(), 
-            0,  // No look-ahead needed
-            true);  // force_flush = true
-    }
 
 	// Finds this toolchange info
 	if (tool != (unsigned int)(-1))

@@ -265,14 +265,7 @@ std::string GCodeWriter::toolchange_prefix() const
 
 std::string GCodeWriter::toolchange(unsigned int extruder_id)
 {
-    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
-    if (region_config && region_config->temperature_preheat_time.value > 0 && 
-        m_config.enable_temperature_offsets) {
-        gcode += m_temperature_manager.process_buffer(
-            m_writer, m_config, m_writer.extruder()->id(), 
-            region_config->temperature_preheat_time.value, 
-            true);  // force_flush = true
-    }
+
     // set the new extruder
 	auto it_extruder = Slic3r::lower_bound_by_predicate(m_extruders.begin(), m_extruders.end(), [extruder_id](const Extruder &e) { return e.id() < extruder_id; });
     assert(it_extruder != m_extruders.end() && it_extruder->id() == extruder_id);

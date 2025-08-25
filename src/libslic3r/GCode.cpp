@@ -256,12 +256,14 @@ namespace Slic3r {
 
 
     void GCodeGenerator::RegionTemperatureManager::reset() {
+        // Reset all temperature tracking
         base_temperature = 0;
         current_temperature = 0;
         last_role = ExtrusionRole::None;
         enabled = false;
         groove_structure_detected = false;
-    
+
+        // Clear the temperature look-ahead buffer
         line_buffer.clear();
         buffer_time_ms = 0.0f;
         accumulated_time_ms = 0.0f;
@@ -1581,6 +1583,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             this->process_layers(print, tool_ordering, collect_layers_to_print(object),
                 *print_object_instance_sequential_active - object.instances().data(), 
                 smooth_path_cache_global, file);
+            
+            m_temperature_manager.reset();
             ++ finished_objects;
             // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
             // Reset it when starting another object from 1st layer.
@@ -1665,6 +1669,17 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             0,  // No look-ahead needed at end
             true));  // force_flush = true
     }
+    
+    
+    // ADD HERE: Final flush and reset before end of print
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0) {
+        file.write(m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            0,  // No look-ahead needed at end
+            true));  // force_flush = true
+    }
+    m_temperature_manager.reset();
     // Write end commands to file.
     file.write(this->retract_and_wipe());
     file.write(m_writer.set_fan(0));
@@ -3132,6 +3147,14 @@ LayerResult GCodeGenerator::process_layer(
     BOOST_LOG_TRIVIAL(trace) << "Exported layer " << layer.id() << " print_z " << print_z <<
     log_memory_info();
 
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0 && last_layer) {
+        result.gcode += m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            region_config->temperature_preheat_time.value, 
+            true);  // force_flush = true for last layer
+    }
+
     result.gcode = std::move(gcode);
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
     return result;
@@ -3154,7 +3177,7 @@ void GCodeGenerator::initialize_instance(
 
     if (print.config().avoid_crossing_perimeters && !is_first) {
         m_avoid_crossing_perimeters.init_layer(*m_layer);
-
+        m_temperature_manager.reset();
         // When starting a new object, use the external motion planner for the first travel move.
         if (m_current_instance != next_instance) {
             m_avoid_crossing_perimeters.use_external_mp_once = true;
@@ -3461,14 +3484,26 @@ std::string GCodeGenerator::extrude_skirt(
     return gcode;
 }
 
-std::string GCodeGenerator::extrude_infill_ranges(
-    const std::vector<InfillRange> &infill_ranges,
-    const std::string &comment
-) {
-    std::string gcode{};
+std::string gcode{};
+    const PrintRegion* last_region = nullptr;
+    
     for (const InfillRange &infill_range : infill_ranges) {
         if (!infill_range.items.empty()) {
+            // Check if we're changing regions
+            if (last_region && last_region != infill_range.region && 
+                m_config.enable_temperature_offsets && 
+                last_region->config().temperature_preheat_time.value > 0) {
+                // Flush buffer when changing regions
+                gcode += m_temperature_manager.process_buffer(
+                    m_writer, m_config, m_writer.extruder()->id(), 
+                    last_region->config().temperature_preheat_time.value, 
+                    true);  // force_flush = true
+            }
+            
             this->m_config.apply(infill_range.region->config());
+            m_current_region = infill_range.region;  // Track current region
+            last_region = infill_range.region;
+            
             for (const GCode::SmoothPath &path : infill_range.items) {
                 gcode += this->extrude_smooth_path(path, false, comment, -1.0);
             }
@@ -3482,7 +3517,22 @@ std::string GCodeGenerator::extrude_perimeters(
     const std::vector<GCode::ExtrusionOrder::Perimeter> &perimeters,
     const InstanceToPrint &print_instance ) {
     
+    std::string gcode{};
+    
     if (!perimeters.empty()) {
+        // Check if we're changing regions and need to flush buffer
+        const PrintRegion* old_region = m_current_region;
+        
+        // If changing regions, flush the buffer before switching
+        if (old_region && old_region != &region && 
+            m_config.enable_temperature_offsets && 
+            old_region->config().temperature_preheat_time.value > 0) {
+            gcode += m_temperature_manager.process_buffer(
+                m_writer, m_config, m_writer.extruder()->id(), 
+                old_region->config().temperature_preheat_time.value, 
+                true);  // force_flush = true
+        }
+        
         // Apply this region's configuration to the generator's working config
         m_config.apply(region.config());
         
