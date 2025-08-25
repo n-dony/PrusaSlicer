@@ -234,25 +234,25 @@ namespace Slic3r {
         }
 
     int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role_with_injection(
-            ExtrusionRole role,
-            const PrintConfig& config,const PrintRegionConfig* region_config,
-            int extruder_id) const
-            {
-                // First get base temperature with standard offsets
-                int temp = get_temperature_for_role(role, config, extruder_id);
+        ExtrusionRole role,
+        const PrintConfig& config,
+        const PrintRegionConfig* region_config,
+        int extruder_id) const  // Only 4 parameters!
+    {
+        int temp = get_temperature_for_role(role, config, extruder_id);
 
-                // Then apply injection molding boost if conditions are met
-                // Apply injection molding boost if all conditions are met
-                if (region_config &&
-                    region_config->enable_injection_molding_temp_boost &&
-                    groove_structure_detected &&
-                    role == ExtrusionRole::FirstInternalPerimeter) {
-                    
-                    temp += std::clamp(static_cast<int>(region_config->injection_molding_temp_boost.value), 0, 5);
-                }
-                
-                return temp;
-            }
+        // Apply injection molding boost if all conditions are met
+        // Get enable_injection_molding_temp_boost from region_config!
+        if (region_config &&
+            region_config->enable_injection_molding_temp_boost &&  // From region_config
+            groove_structure_detected &&
+            role == ExtrusionRole::FirstInternalPerimeter) {
+            
+            temp += std::clamp(static_cast<int>(region_config->injection_molding_temp_boost.value), 0, 5);
+        }
+
+        return temp;
+    }
 
             // Detect if current layer has groove structure
         void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
@@ -377,6 +377,7 @@ namespace Slic3r {
             }
         }
 
+        
 std::string GCodeGenerator::extrude_with_lookahead(
     const std::string& extrusion_gcode,
     ExtrusionRole role,
@@ -412,12 +413,9 @@ std::string GCodeGenerator::extrude_with_lookahead(
     
     // Get target temperature for this role
     int target_temp = m_temperature_manager.get_temperature_for_role_with_injection(
-
-    role, m_config, 
-
+    role, m_config,
     m_current_region ? &m_current_region->config() : nullptr,
-
-    m_writer.extruder()->id());    
+    m_writer.extruder()->id());     
     // Buffer the line
     m_temperature_manager.buffer_line(extrusion_gcode, time_ms, role, target_temp);
     
@@ -1650,6 +1648,13 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             file.write(m_wipe_tower->finalize(*this));
     }
 
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0) {
+        file.write(m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            0,  // No look-ahead needed at end
+            true));  // force_flush = true
+    }
     // Write end commands to file.
     file.write(this->retract_and_wipe());
     file.write(m_writer.set_fan(0));
@@ -3261,6 +3266,15 @@ std::string GCodeGenerator::change_layer(
     const bool first_layer
 ) {
     std::string gcode;
+
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0 && 
+        m_config.enable_temperature_offsets) {
+        gcode += m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            region_config->temperature_preheat_time.value, 
+            true);  // force_flush = true
+    }
     
     if (m_current_region && 
         m_current_region->config().temperature_preheat_time.value > 0 && 
@@ -4238,6 +4252,15 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
     }
 
     std::string gcode{};
+
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0) {
+        gcode += m_temperature_manager.process_buffer(
+            m_writer, m_config, m_writer.extruder()->id(), 
+            region_config->temperature_preheat_time.value, 
+            true);  // force_flush = true
+    }
+
     if (!this->m_config.complete_objects.value) {
         gcode += this->m_label_objects.maybe_stop_instance();
     }

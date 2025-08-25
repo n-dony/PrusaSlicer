@@ -471,8 +471,9 @@ private:
 
         // Existing methods
         int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
-        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,const PrintRegionConfig* region_config, 
-                                                   int extruder_id, bool enable_injection_boost) const;
+        int get_temperature_for_role_with_injection(ExtrusionRole role, const PrintConfig& config,
+                                           const PrintRegionConfig* region_config,
+                                           int extruder_id) const;
         void detect_groove_structure(const Layer* layer);
         
         // New buffering methods
