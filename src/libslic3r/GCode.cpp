@@ -434,7 +434,7 @@ std::string GCodeGenerator::extrude_with_lookahead(
     // Process buffer and return any G-code that should be emitted now
     return m_temperature_manager.process_buffer(
         m_writer, m_config, m_writer.extruder()->id(), 
-        m_current_region ? region_config->temperature_preheat_time.value : 0, 
+        m_current_region ? m_current_region->config().temperature_preheat_time.value : 0, 
         false);
 }
 
@@ -1670,15 +1670,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
             true));  // force_flush = true
     }
     
-    
-    // ADD HERE: Final flush and reset before end of print
-    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
-    if (region_config && region_config->temperature_preheat_time.value > 0) {
-        file.write(m_temperature_manager.process_buffer(
-            m_writer, m_config, m_writer.extruder()->id(), 
-            0,  // No look-ahead needed at end
-            true));  // force_flush = true
-    }
+
     m_temperature_manager.reset();
     // Write end commands to file.
     file.write(this->retract_and_wipe());
@@ -3302,16 +3294,16 @@ std::string GCodeGenerator::change_layer(
 
     const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
     if (region_config && region_config->temperature_preheat_time.value > 0) {
-        file.write(m_temperature_manager.process_buffer(
+        gcode += m_temperature_manager.process_buffer(
             m_writer, m_config, m_writer.extruder()->id(), 
             0,  // No look-ahead
-            true));  // force_flush = true
+            true);  // force_flush = true
         
         // Add final safety flush
         while (!m_temperature_manager.line_buffer.empty()) {
-            file.write(m_temperature_manager.process_buffer(
+            gcode += m_temperature_manager.process_buffer(
                 m_writer, m_config, m_writer.extruder()->id(), 
-                0, true));
+                0, true);
         }
     }
 
@@ -3430,35 +3422,46 @@ std::string GCodeGenerator::extrude_smooth_path(
         GCode::reverse(reversed_smooth_path);
         m_wipe.set_path(std::move(reversed_smooth_path));
     }
-    if (m_region_config->temperature_preheat_time.value > 0 && 
+    const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
+    if (region_config && region_config->temperature_preheat_time.value > 0 &&
         m_config.enable_temperature_offsets) {
         // Calculate actual speed (may have been modified)
-        float actual_speed = speed > 0 ? speed : 
+        float actual_speed = speed > 0 ? speed :
             [this, role]() -> float {
-                // Get speed based on role (simplified)
+                // Get speed based on role - matching existing _extrude function
                 if (role == ExtrusionRole::ExternalPerimeter)
                     return m_config.external_perimeter_speed.value;
                 else if (role == ExtrusionRole::Perimeter)
                     return m_config.perimeter_speed.value;
-                else if (role == ExtrusionRole::Infill)
+                else if (role == ExtrusionRole::FirstInternalPerimeter)
+                    return m_config.first_internal_perimeter_speed.value;
+                else if (role == ExtrusionRole::SecondInternalPerimeter)
+                    return m_config.second_internal_perimeter_speed.value;
+                else if (role == ExtrusionRole::InternalInfill)  // FIXED
                     return m_config.infill_speed.value;
                 else if (role == ExtrusionRole::SolidInfill)
                     return m_config.solid_infill_speed.value;
                 else if (role == ExtrusionRole::TopSolidInfill)
                     return m_config.top_solid_infill_speed.value;
+                else if (role == ExtrusionRole::Ironing)
+                    return m_config.ironing_speed.value;
+                else if (role == ExtrusionRole::BridgeInfill)  // FIXED
+                    return m_config.bridge_speed.value;
                 else if (role == ExtrusionRole::SupportMaterial)
                     return m_config.support_material_speed.value;
-                else if (role == ExtrusionRole::Bridge)
-                    return m_config.bridge_speed.value;
+                else if (role == ExtrusionRole::SupportMaterialInterface)
+                    return m_config.support_material_interface_speed.value;
                 else if (role == ExtrusionRole::GapFill)
                     return m_config.gap_fill_speed.value;
-            
-            // Fallback to a default if role is not handled
-            return m_config.default_speed.value;
+                else if (role == ExtrusionRole::OverhangPerimeter)
+                    return m_config.bridge_speed.value;  // Overhangs use bridge speed
+
+                // Fallback - use travel speed as safe default
+                return m_config.travel_speed.value;
             }();
         
         gcode = extrude_with_lookahead(path_gcode, role, 
-                                      total_distance, actual_speed / 60.0f);
+                                      total_distance, actual_speed);
     } else {
         // Original path: check temperature immediately
         gcode = m_temperature_manager.set_temperature_if_needed(
@@ -3484,7 +3487,11 @@ std::string GCodeGenerator::extrude_skirt(
     return gcode;
 }
 
-std::string gcode{};
+std::string GCodeGenerator::extrude_infill_ranges(
+    const std::vector<InfillRange> &infill_ranges,
+    const std::string &comment)
+{
+    std::string gcode{};
     const PrintRegion* last_region = nullptr;
     
     for (const InfillRange &infill_range : infill_ranges) {
@@ -3515,8 +3522,8 @@ std::string gcode{};
 std::string GCodeGenerator::extrude_perimeters(
     const PrintRegion &region,
     const std::vector<GCode::ExtrusionOrder::Perimeter> &perimeters,
-    const InstanceToPrint &print_instance ) {
-    
+    const InstanceToPrint &print_instance) 
+{
     std::string gcode{};
     
     if (!perimeters.empty()) {
@@ -3524,12 +3531,12 @@ std::string GCodeGenerator::extrude_perimeters(
         const PrintRegion* old_region = m_current_region;
         
         // If changing regions, flush the buffer before switching
-        if (old_region && old_region != &region && 
-            m_config.enable_temperature_offsets && 
+        if (old_region && old_region != &region &&
+            m_config.enable_temperature_offsets &&
             old_region->config().temperature_preheat_time.value > 0) {
             gcode += m_temperature_manager.process_buffer(
-                m_writer, m_config, m_writer.extruder()->id(), 
-                old_region->config().temperature_preheat_time.value, 
+                m_writer, m_config, m_writer.extruder()->id(),
+                old_region->config().temperature_preheat_time.value,
                 true);  // force_flush = true
         }
         
@@ -3543,46 +3550,52 @@ std::string GCodeGenerator::extrude_perimeters(
         if (region.config().enable_injection_molding_temp_boost && m_layer) {
             m_temperature_manager.detect_groove_structure(m_layer);
         }
-    }
-
-    std::string gcode{};
-
-    for (const GCode::ExtrusionOrder::Perimeter &perimeter : perimeters) {
-        double speed{-1};
-        if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)
-            speed = m_config.small_perimeter_speed.get_abs_value(m_config.perimeter_speed);
+        
+        // Process each perimeter
+        for (const GCode::ExtrusionOrder::Perimeter &perimeter : perimeters) {
+            double speed{-1};
+            if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)
+                speed = m_config.small_perimeter_speed.get_abs_value(m_config.perimeter_speed);
             
-        gcode += this->extrude_smooth_path(perimeter.smooth_path, 
-                                          perimeter.extrusion_entity->is_loop(), 
-                                          comment_perimeter, speed, perimeter.wipe_offset);
-        this->m_travel_obstacle_tracker.mark_extruded(
-            perimeter.extrusion_entity, print_instance.object_layer_to_print_id, print_instance.instance_id
-        );
-
-        const bool is_extruding{
-            !perimeter.smooth_path.empty()
-            && !perimeter.smooth_path.front().path.empty()
-            && perimeter.smooth_path.front().path.front().e_fraction > 0
-        };
-
-        if (
-            !m_wipe.enabled()
-            && perimeter.extrusion_entity->role().is_external_perimeter()
-            && m_layer != nullptr
-            && m_config.perimeters.value > 1
-            && is_extruding
-        ) {
-            // Only wipe inside if the wipe along the perimeter is disabled.
-            // Make a little move inwards before leaving loop.
-            if (std::optional<Point> pt = wipe_hide_seam(perimeter.smooth_path, perimeter.reversed, scale_(EXTRUDER_CONFIG(nozzle_diameter))); pt) {
-                // Generate the seam hiding travel move.
-                gcode += m_writer.travel_to_xy(this->point_to_gcode(*pt), "move inwards before travel");
-                this->last_position = *pt;
+            gcode += this->extrude_smooth_path(
+                perimeter.smooth_path,
+                perimeter.extrusion_entity->is_loop(),
+                comment_perimeter, 
+                speed, 
+                perimeter.wipe_offset);
+            
+            this->m_travel_obstacle_tracker.mark_extruded(
+                perimeter.extrusion_entity, 
+                print_instance.object_layer_to_print_id, 
+                print_instance.instance_id);
+            
+            const bool is_extruding{
+                !perimeter.smooth_path.empty()
+                && !perimeter.smooth_path.front().path.empty()
+                && perimeter.smooth_path.front().path.front().e_fraction > 0
+            };
+            
+            if (!m_wipe.enabled()
+                && perimeter.extrusion_entity->role().is_external_perimeter()
+                && m_layer != nullptr
+                && m_config.perimeters.value > 1
+                && is_extruding) {
+                // Only wipe inside if the wipe along the perimeter is disabled.
+                // Make a little move inwards before leaving loop.
+                if (std::optional<Point> pt = wipe_hide_seam(
+                    perimeter.smooth_path, 
+                    perimeter.reversed, 
+                    scale_(EXTRUDER_CONFIG(nozzle_diameter))); pt) {
+                    // Generate the seam hiding travel move.
+                    gcode += m_writer.travel_to_xy(this->point_to_gcode(*pt), "move inwards before travel");
+                    this->last_position = *pt;
+                }
             }
         }
     }
+    
     return gcode;
-};
+}
 
 std::string GCodeGenerator::extrude_support(const std::vector<GCode::ExtrusionOrder::SupportPath> &support_extrusions)
 {
