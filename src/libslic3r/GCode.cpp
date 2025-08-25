@@ -254,28 +254,38 @@ namespace Slic3r {
         return temp;
     }
 
+
+    void GCodeGenerator::RegionTemperatureManager::reset() {
+        base_temperature = 0;
+        current_temperature = 0;
+        last_role = ExtrusionRole::None;
+        enabled = false;
+        groove_structure_detected = false;
+    
+        line_buffer.clear();
+        buffer_time_ms = 0.0f;
+        accumulated_time_ms = 0.0f;
+    }
+
             // Detect if current layer has groove structure
-        void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
-                groove_structure_detected = false;
-
-                if (!layer) return;
-
-                // Check each region for groove structure
-                for (const LayerRegion* region : layer->regions()) {
-                    int external_count = 0;
-                    int first_internal_count = 0;
-                    int second_internal_count = 0;
-
-                    // This is simplified - actual implementation would scan perimeter entities
-                    // Looking for presence of all three types needed for groove
-
-                    // If we find all three, we have a groove structure
-                    if (external_count > 0 && first_internal_count > 0 && second_internal_count > 0) {
-                        groove_structure_detected = true;
-                        return;
-                    }
+    void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
+            
+            groove_structure_detected = false;
+            if (!layer) return;
+            // Check each region for groove structure
+            for (const LayerRegion* region : layer->regions()) {
+                int external_count = 0;
+                int first_internal_count = 0;
+                int second_internal_count = 0;
+                // This is simplified - actual implementation would scan perimeter entities
+                // Looking for presence of all three types needed for groove
+                // If we find all three, we have a groove structure
+                if (external_count > 0 && first_internal_count > 0 && second_internal_count > 0) {
+                    groove_structure_detected = true;
+                    return;
                 }
             }
+        }
 
     void GCodeGenerator::RegionTemperatureManager::buffer_line(
         const std::string& gcode, float time_ms, ExtrusionRole role, int target_temp) 
@@ -340,7 +350,7 @@ namespace Slic3r {
 
     // Modified set_temperature_if_needed to work with buffering
     std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
-        GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, const PrintRegionConfig& region_config, int extruder_id) 
+        GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, const PrintRegionConfig* region_config, int extruder_id) 
     {
         if (!enabled || !config.enable_temperature_offsets)
             return "";
@@ -350,7 +360,7 @@ namespace Slic3r {
             role, config,region_config, extruder_id);
         
         // If look-ahead is disabled, use immediate temperature change
-        if (config.temperature_preheat_time.value <= 0) {
+        if (!region_config || region_config->temperature_preheat_time.value <= 0){
             if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
                 current_temperature = target_temp;
                 std::string gcode = "; Temperature change for " + 
@@ -385,7 +395,7 @@ std::string GCodeGenerator::extrude_with_lookahead(
     float speed_mm_s) 
 {
     // If look-ahead disabled, return immediately
-    if (m_current_region && m_current_region->config().temperature_preheat_time.value <= 0) {
+    if (!m_current_region || m_current_region->config().temperature_preheat_time.value <= 0) {
         return extrusion_gcode;
     }
     
@@ -422,7 +432,7 @@ std::string GCodeGenerator::extrude_with_lookahead(
     // Process buffer and return any G-code that should be emitted now
     return m_temperature_manager.process_buffer(
         m_writer, m_config, m_writer.extruder()->id(), 
-        m_current_region ? m_current_region->config().temperature_preheat_time.value : 0, 
+        m_current_region ? region_config->temperature_preheat_time.value : 0, 
         false);
 }
 
@@ -3268,20 +3278,18 @@ std::string GCodeGenerator::change_layer(
     std::string gcode;
 
     const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
-    if (region_config && region_config->temperature_preheat_time.value > 0 && 
-        m_config.enable_temperature_offsets) {
-        gcode += m_temperature_manager.process_buffer(
+    if (region_config && region_config->temperature_preheat_time.value > 0) {
+        file.write(m_temperature_manager.process_buffer(
             m_writer, m_config, m_writer.extruder()->id(), 
-            region_config->temperature_preheat_time.value, 
-            true);  // force_flush = true
-    }
-    
-    if (m_current_region && 
-        m_current_region->config().temperature_preheat_time.value > 0 && 
-        m_config.enable_temperature_offsets) {
-        gcode += m_temperature_manager.process_buffer(
-            m_writer, m_config, m_writer.extruder()->id(), 
-            m_current_region->config().temperature_preheat_time.value, true);
+            0,  // No look-ahead
+            true));  // force_flush = true
+        
+        // Add final safety flush
+        while (!m_temperature_manager.line_buffer.empty()) {
+            file.write(m_temperature_manager.process_buffer(
+                m_writer, m_config, m_writer.extruder()->id(), 
+                0, true));
+        }
     }
 
     if (m_layer_count > 0)
@@ -3399,7 +3407,7 @@ std::string GCodeGenerator::extrude_smooth_path(
         GCode::reverse(reversed_smooth_path);
         m_wipe.set_path(std::move(reversed_smooth_path));
     }
-    if (m_config.temperature_preheat_time.value > 0 && 
+    if (m_region_config->temperature_preheat_time.value > 0 && 
         m_config.enable_temperature_offsets) {
         // Calculate actual speed (may have been modified)
         float actual_speed = speed > 0 ? speed : 
