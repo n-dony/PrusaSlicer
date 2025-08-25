@@ -3427,17 +3427,21 @@ std::string GCodeGenerator::extrude_smooth_path(
         m_config.enable_temperature_offsets) {
         // Calculate actual speed (may have been modified)
         float actual_speed = speed > 0 ? speed :
-            [this, role]() -> float {
-                // Get speed based on role - matching existing _extrude function
+            [this, role, region_config]() -> float {
+                // Get speed based on role - use region_config for region-specific speeds
                 if (role == ExtrusionRole::ExternalPerimeter)
                     return m_config.external_perimeter_speed.value;
                 else if (role == ExtrusionRole::Perimeter)
                     return m_config.perimeter_speed.value;
                 else if (role == ExtrusionRole::FirstInternalPerimeter)
-                    return m_config.first_internal_perimeter_speed.value;
+                    return region_config ? 
+                        region_config->first_internal_perimeter_speed.get_abs_value(m_config.perimeter_speed.value) :
+                        m_config.perimeter_speed.value;
                 else if (role == ExtrusionRole::SecondInternalPerimeter)
-                    return m_config.second_internal_perimeter_speed.value;
-                else if (role == ExtrusionRole::InternalInfill)  // FIXED
+                    return region_config ?
+                        region_config->second_internal_perimeter_speed.get_abs_value(m_config.perimeter_speed.value) :
+                        m_config.perimeter_speed.value;
+                else if (role == ExtrusionRole::InternalInfill)
                     return m_config.infill_speed.value;
                 else if (role == ExtrusionRole::SolidInfill)
                     return m_config.solid_infill_speed.value;
@@ -3445,7 +3449,7 @@ std::string GCodeGenerator::extrude_smooth_path(
                     return m_config.top_solid_infill_speed.value;
                 else if (role == ExtrusionRole::Ironing)
                     return m_config.ironing_speed.value;
-                else if (role == ExtrusionRole::BridgeInfill)  // FIXED
+                else if (role == ExtrusionRole::BridgeInfill)
                     return m_config.bridge_speed.value;
                 else if (role == ExtrusionRole::SupportMaterial)
                     return m_config.support_material_speed.value;
@@ -3454,16 +3458,16 @@ std::string GCodeGenerator::extrude_smooth_path(
                 else if (role == ExtrusionRole::GapFill)
                     return m_config.gap_fill_speed.value;
                 else if (role == ExtrusionRole::OverhangPerimeter)
-                    return m_config.bridge_speed.value;  // Overhangs use bridge speed
-
+                    return m_config.bridge_speed.value;
+                
                 // Fallback - use travel speed as safe default
                 return m_config.travel_speed.value;
             }();
         
         gcode = extrude_with_lookahead(path_gcode, role, 
-                                      total_distance, actual_speed);
+                                      total_distance, actual_speed / 60.0f);
     } else {
-        // Original path: check temperature immediately
+        // Original path: check temperature immediately  
         gcode = m_temperature_manager.set_temperature_if_needed(
             m_writer, role, m_config, region_config, m_writer.extruder()->id());
         gcode += path_gcode;
