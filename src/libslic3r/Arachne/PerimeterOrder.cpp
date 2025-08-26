@@ -281,7 +281,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
         std::vector<const PerimeterExtrusion*> first_internals; 
         std::vector<const PerimeterExtrusion*> second_internals;
         std::vector<const PerimeterExtrusion*> others;
-        
+
         for (auto* e : grouped_extrusions.back().extrusions) {
             if (e->is_external_perimeter()) {
                 externals.push_back(e);
@@ -293,20 +293,33 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
                 others.push_back(e);
             }
         }
-        
+
         // Only apply groove injection if we have all components
         if (!externals.empty() && !first_internals.empty() && !second_internals.empty()) {
-            // Rebuild for groove injection (before reverse):
-            // First internals → Externals → Second internals → Others
-            std::vector<const PerimeterExtrusion*> reordered;
+        std::vector<const PerimeterExtrusion*> reordered;
+        
+        if (!external_perimeters_first) {
+            // Will be reversed, so build in opposite order:
+            // Others, Second_internals, Externals, First_internals
+            // After reverse: First_internals, Externals, Second_internals, Others
+            reordered.insert(reordered.end(), others.begin(), others.end());
+            reordered.insert(reordered.end(), second_internals.begin(), second_internals.end());
+            reordered.insert(reordered.end(), externals.begin(), externals.end());
             reordered.insert(reordered.end(), first_internals.begin(), first_internals.end());
+        } else {
+            // No reverse, build in desired order:
+            // Externals, Second_internals, First_internals, Others
             reordered.insert(reordered.end(), externals.begin(), externals.end());
             reordered.insert(reordered.end(), second_internals.begin(), second_internals.end());
+            reordered.insert(reordered.end(), first_internals.begin(), first_internals.end());
             reordered.insert(reordered.end(), others.begin(), others.end());
-            grouped_extrusions.back().extrusions = reordered;
+        }
+        
+        grouped_extrusions.back().extrusions = reordered;
         }
         // else: Keep original order if no groove structure
     }
+
 
     const std::vector<size_t> grouped_extrusion_order = order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
 
