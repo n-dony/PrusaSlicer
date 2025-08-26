@@ -186,7 +186,6 @@ namespace Slic3r {
         {
             if (!enabled || extruder_id < 0)
                 return base_temperature;
-            printf("DEBUG: Manager A ");
             float offset = 0;
 
             // Safely check size before accessing
@@ -228,7 +227,6 @@ namespace Slic3r {
                 // For any other roles, no offset
                 offset = 0;
             }
-            printf("DEBUG: Manager B ");
 
             return base_temperature + static_cast<int>(offset);
         }
