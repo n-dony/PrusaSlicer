@@ -1933,10 +1933,6 @@ void GCodeGenerator::process_layers(
                 return LayerResult::make_nop_layer_result();
             } else {
                 ObjectLayerToPrint &layer = layers_to_print[layer_to_print_idx];
-                // Initialize temperature manager for the layer
-                if (m_writer.extruder()) {
-                    m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
-                }
                 print.throw_if_canceled();
                 return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
@@ -3169,7 +3165,6 @@ void GCodeGenerator::initialize_instance(
 
     if (print.config().avoid_crossing_perimeters && !is_first) {
         m_avoid_crossing_perimeters.init_layer(*m_layer);
-        m_temperature_manager.reset();
         // When starting a new object, use the external motion planner for the first travel move.
         if (m_current_instance != next_instance) {
             m_avoid_crossing_perimeters.use_external_mp_once = true;
@@ -3459,7 +3454,7 @@ std::string GCodeGenerator::extrude_smooth_path(
                     return m_config.gap_fill_speed.value;
                 else if (role == ExtrusionRole::OverhangPerimeter)
                     return m_config.bridge_speed.value;
-                
+
                 // Fallback - use travel speed as safe default
                 return m_config.travel_speed.value;
             }();

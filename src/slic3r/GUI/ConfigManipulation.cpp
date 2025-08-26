@@ -292,7 +292,18 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     for (size_t i = 0; i < 4; i++) {
         toggle_field("overhang_speed_" + std::to_string(i), config->opt_bool("enable_dynamic_overhang_speeds"));
     }
-
+    
+    bool enable_injection_molding = config->opt_bool("enable_injection_molding_order");
+    toggle_field("enable_injection_molding_temp_boost", enable_injection_molding);
+    toggle_field("injection_molding_temp_boost", 
+        enable_injection_molding && config->opt_bool("enable_injection_molding_temp_boost"));
+    
+    bool enable_reverse_internal = config->opt_bool("reverse_internal_perimeters");  
+    toggle_field("reverse_internal_perimeters_at", enable_reverse_internal);
+    
+    // Temperature preheat should be enabled when temperature offsets are enabled
+    bool enable_temp_offsets = config->opt_bool("enable_temperature_offsets");
+    toggle_field("temperature_preheat_time", enable_temp_offsets);
     const bool have_infill                      = config->option<ConfigOptionPercent>("fill_density")->value > 0;
     const bool has_automatic_infill_combination = config->option<ConfigOptionBool>("automatic_infill_combination")->value;
     // infill_extruder uses the same logic as in Print::extruders()
