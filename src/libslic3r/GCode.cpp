@@ -328,50 +328,57 @@ void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Lay
         buffer_time_ms += time_ms;
     }
 
-    std::string GCodeGenerator::RegionTemperatureManager::process_buffer(
+    std::string RegionTemperatureManager::process_buffer(
         GCodeWriter& writer, const PrintConfig& config, int extruder_id, 
         float preheat_time_ms, bool force_flush) 
     {
         std::string output;
-
-        // Process buffer when we have enough look-ahead or when forced
-        while ((buffer_time_ms > preheat_time_ms * 2 || force_flush) && !line_buffer.empty()) {
+        
+        // Process when we have enough look-ahead OR forced flush
+        while (!line_buffer.empty() && 
+               (buffer_time_ms >= preheat_time_ms || force_flush)) {
+            
             BufferedLine& front = line_buffer.front();
-
-            // Check for upcoming temperature changes
+            
+            // Look ahead for temperature changes (skip the front line)
             float time_to_future = 0;
-            for (auto& future_line : line_buffer) {
-                time_to_future += future_line.time_ms;
-
-                // Check if this future line needs different temperature
-                if (!future_line.temp_change_inserted && 
-                    std::abs(future_line.target_temp - current_temperature) >= config.temperature_change_threshold) {
+            bool found_temp_change = false;
+            
+            for (auto it = std::next(line_buffer.begin()); it != line_buffer.end(); ++it) {
+                time_to_future += it->time_ms;
+                
+                if (!it->temp_change_inserted && 
+                    std::abs(it->target_temp - current_temperature) >= config.temperature_change_threshold) {
                     
-                    // Should we insert temperature change now?
                     if (time_to_future <= preheat_time_ms) {
-                        // Insert temperature change NOW for future move
+                        // Insert temperature change NOW for this future move
                         output += "; Temperature pre-heat for ";
                         output += gcode_extrusion_role_to_string(
-                            extrusion_role_to_gcode_extrusion_role(future_line.role));
+                            extrusion_role_to_gcode_extrusion_role(it->role));
                         output += " in " + std::to_string(int(time_to_future)) + "ms\n";
-                        output += writer.set_temperature(future_line.target_temp, false, extruder_id);
+                        output += writer.set_temperature(it->target_temp, false, extruder_id);
                         
-                        current_temperature = future_line.target_temp;
-                        future_line.temp_change_inserted = true;
-                        break; // Only one temperature change per line
+                        current_temperature = it->target_temp;
+                        it->temp_change_inserted = true;
+                        found_temp_change = true;
+                        break;
                     }
                 }
             }
-
+            
             // Output the front line
             output += front.gcode;
-
+            
             // Update buffer state
             buffer_time_ms -= front.time_ms;
-            accumulated_time_ms += front.time_ms;
             line_buffer.pop_front();
+            
+            // If forced flush and buffer empty but not enough lookahead processed
+            if (force_flush && line_buffer.empty()) {
+                break;
+            }
         }
-
+        
         return output;
     }
 
@@ -3389,66 +3396,52 @@ std::string GCodeGenerator::extrude_smooth_path(
     const std::size_t wipe_offset
 ) {
     std::string gcode;
-
-        // Get the role from first element
-    ExtrusionRole role = smooth_path.empty() ? ExtrusionRole::None : 
-                        smooth_path.front().path_attributes.role;
-    // Generate the extrusion G-code as usual
-    std::string path_gcode;
-    float total_distance = 0;
-
-    // Extrude along the smooth path.
-    bool          is_bridge_extruded = false;
-    EmitModifiers emit_modifiers     = EmitModifiers::create_with_disabled_emits();
-    for (auto el_it = smooth_path.begin(); el_it != smooth_path.end(); ++el_it) {
-        const auto next_el_it = next(el_it);
-
-        // By default, GCodeGenerator::_extrude() emit markers _BRIDGE_FAN_START, _BRIDGE_FAN_END and _RESET_FAN_SPEED for every extrusion.
-        // Together with split extrusions because of different ExtrusionAttributes, this could flood g-code with those markers and then
-        // produce an unnecessary number of duplicity M106.
-        // To prevent this, we control when each marker should be emitted by EmitModifiers, which allows determining when a bridge starts and ends,
-        // even when it is split into several extrusions.
-        if (el_it->path_attributes.role.is_bridge()) {
-            emit_modifiers.emit_bridge_fan_start = !is_bridge_extruded;
-            emit_modifiers.emit_bridge_fan_end   = next_el_it == smooth_path.end() || !next_el_it->path_attributes.role.is_bridge();
-            is_bridge_extruded                   = true;
-        } else if (is_bridge_extruded) {
-            emit_modifiers.emit_bridge_fan_start = false;
-            emit_modifiers.emit_bridge_fan_end   = false;
-            is_bridge_extruded                   = false;
-        }
-
-        // Ensure that just for the last extrusion from the smooth path, the fan speed will be reset back
-        // to the value calculated by the CoolingBuffer.
-        if (next_el_it == smooth_path.end()) {
-            emit_modifiers.emit_fan_speed_reset = true;
-        }
-
-        gcode += this->_extrude(el_it->path_attributes, el_it->path, description, speed, emit_modifiers);
-    }
-
-    // reset acceleration
-    gcode += m_writer.set_print_acceleration(fast_round_up<unsigned int>(m_config.default_acceleration.value));
-
-    if (is_loop) {
-        GCode::SmoothPath wipe{smooth_path.begin() + wipe_offset, smooth_path.end()};
-        m_wipe.set_path(std::move(wipe));
-    } else {
-        if (wipe_offset > 0) {
-            throw std::runtime_error("Wipe offset is not supported for non looped paths!");
-        }
-
-        GCode::SmoothPath reversed_smooth_path{smooth_path};
-        GCode::reverse(reversed_smooth_path);
-        m_wipe.set_path(std::move(reversed_smooth_path));
-    }
     const PrintRegionConfig* region_config = m_current_region ? &m_current_region->config() : nullptr;
-    if (region_config && region_config->temperature_preheat_time.value > 0 &&
-        m_config.enable_temperature_offsets) {
-        // Calculate actual speed (may have been modified)
-        float actual_speed = speed > 0 ? speed :
-            [this, role, region_config]() -> float {
-                // Get speed based on role - use region_config for region-specific speeds
+    
+    // Check if buffering is enabled
+    bool use_buffering = region_config && 
+                        region_config->temperature_preheat_time.value > 0 &&
+                        m_config.enable_temperature_offsets;
+    
+    // Bridge fan control setup
+    bool is_bridge_extruded = false;
+    EmitModifiers emit_modifiers = EmitModifiers::create_with_disabled_emits();
+    
+    if (use_buffering) {
+        // BUFFERED PATH: Process each segment through the buffer
+        for (auto el_it = smooth_path.begin(); el_it != smooth_path.end(); ++el_it) {
+            const auto next_el_it = std::next(el_it);
+            
+            // Handle bridge fan control
+            if (el_it->path_attributes.role.is_bridge()) {
+                emit_modifiers.emit_bridge_fan_start = !is_bridge_extruded;
+                emit_modifiers.emit_bridge_fan_end = next_el_it == smooth_path.end() || !next_el_it->path_attributes.role.is_bridge();
+                is_bridge_extruded = true;
+            } else if (is_bridge_extruded) {
+                emit_modifiers.emit_bridge_fan_start = false;
+                emit_modifiers.emit_bridge_fan_end = false;
+                is_bridge_extruded = false;
+            }
+            
+            if (next_el_it == smooth_path.end()) {
+                emit_modifiers.emit_fan_speed_reset = true;
+            }
+            
+            // Generate G-code for this segment
+            std::string segment_gcode = this->_extrude(
+                el_it->path_attributes, 
+                el_it->path, 
+                description, 
+                speed, 
+                emit_modifiers
+            );
+            
+            // Calculate segment distance and time
+            float distance = el_it->path.length() / SCALING_FACTOR;  // Convert to mm
+            
+            // Get actual speed for this role
+            float segment_speed = speed > 0 ? speed : [this, &el_it, region_config]() -> float {
+                ExtrusionRole role = el_it->path_attributes.role;
                 if (role == ExtrusionRole::ExternalPerimeter)
                     return m_config.external_perimeter_speed.value;
                 else if (role == ExtrusionRole::Perimeter)
@@ -3467,8 +3460,6 @@ std::string GCodeGenerator::extrude_smooth_path(
                     return m_config.solid_infill_speed.value;
                 else if (role == ExtrusionRole::TopSolidInfill)
                     return m_config.top_solid_infill_speed.value;
-                else if (role == ExtrusionRole::Ironing)
-                    return m_config.ironing_speed.value;
                 else if (role == ExtrusionRole::BridgeInfill)
                     return m_config.bridge_speed.value;
                 else if (role == ExtrusionRole::SupportMaterial)
@@ -3479,19 +3470,105 @@ std::string GCodeGenerator::extrude_smooth_path(
                     return m_config.gap_fill_speed.value;
                 else if (role == ExtrusionRole::OverhangPerimeter)
                     return m_config.bridge_speed.value;
-
-                // Fallback - use travel speed as safe default
+                else if (role == ExtrusionRole::Ironing)
+                    return m_config.ironing_speed.value;
+                // Fallback
                 return m_config.travel_speed.value;
             }();
+            
+            // Calculate time in milliseconds
+            float time_ms = (distance / (segment_speed / 60.0f)) * 1000.0f;
+            
+            // Get target temperature for this role
+            int target_temp = m_temperature_manager.get_temperature_for_role_with_injection(
+                el_it->path_attributes.role, 
+                m_config, 
+                region_config, 
+                m_writer.extruder()->id()
+            );
+            
+            // Buffer this segment
+            m_temperature_manager.buffer_line(
+                segment_gcode, 
+                time_ms, 
+                el_it->path_attributes.role, 
+                target_temp
+            );
+            
+            // Process buffer and get any G-code that should be emitted now
+            gcode += m_temperature_manager.process_buffer(
+                m_writer, 
+                m_config, 
+                m_writer.extruder()->id(),
+                region_config->temperature_preheat_time.value,
+                false  // not forcing flush yet
+            );
+        }
         
-        gcode = extrude_with_lookahead(path_gcode, role, 
-                                      total_distance, actual_speed / 60.0f);
+        // Flush remaining buffer at path end
+        gcode += m_temperature_manager.process_buffer(
+            m_writer, 
+            m_config, 
+            m_writer.extruder()->id(),
+            region_config->temperature_preheat_time.value,
+            true  // force flush
+        );
+        
     } else {
-        // Original path: check temperature immediately  
-        gcode = m_temperature_manager.set_temperature_if_needed(
-            m_writer, role, m_config, region_config, m_writer.extruder()->id());
-        gcode += path_gcode;
+        // NON-BUFFERED PATH: Original behavior
+        for (auto el_it = smooth_path.begin(); el_it != smooth_path.end(); ++el_it) {
+            const auto next_el_it = std::next(el_it);
+            
+            // Handle bridge fan control
+            if (el_it->path_attributes.role.is_bridge()) {
+                emit_modifiers.emit_bridge_fan_start = !is_bridge_extruded;
+                emit_modifiers.emit_bridge_fan_end = next_el_it == smooth_path.end() || !next_el_it->path_attributes.role.is_bridge();
+                is_bridge_extruded = true;
+            } else if (is_bridge_extruded) {
+                emit_modifiers.emit_bridge_fan_start = false;
+                emit_modifiers.emit_bridge_fan_end = false;
+                is_bridge_extruded = false;
+            }
+            
+            if (next_el_it == smooth_path.end()) {
+                emit_modifiers.emit_fan_speed_reset = true;
+            }
+            
+            // Check temperature immediately before each segment
+            gcode += m_temperature_manager.set_temperature_if_needed(
+                m_writer, 
+                el_it->path_attributes.role, 
+                m_config, 
+                region_config, 
+                m_writer.extruder()->id()
+            );
+            
+            gcode += this->_extrude(
+                el_it->path_attributes, 
+                el_it->path, 
+                description, 
+                speed, 
+                emit_modifiers
+            );
+        }
     }
+    
+    // Reset acceleration
+    gcode += m_writer.set_print_acceleration(fast_round_up<unsigned int>(m_config.default_acceleration.value));
+    
+    // Set up wipe path
+    if (is_loop) {
+        GCode::SmoothPath wipe{smooth_path.begin() + wipe_offset, smooth_path.end()};
+        m_wipe.set_path(std::move(wipe));
+    } else {
+        if (wipe_offset > 0) {
+            throw std::runtime_error("Wipe offset is not supported for non looped paths!");
+        }
+        GCode::SmoothPath reversed_smooth_path{smooth_path};
+        GCode::reverse(reversed_smooth_path);
+        m_wipe.set_path(std::move(reversed_smooth_path));
+    }
+    
     return gcode;
 }
 
