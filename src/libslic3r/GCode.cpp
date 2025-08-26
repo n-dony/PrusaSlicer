@@ -270,24 +270,51 @@ namespace Slic3r {
     }
 
             // Detect if current layer has groove structure
-    void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
+void GCodeGenerator::RegionTemperatureManager::detect_groove_structure(const Layer* layer) {
+    groove_structure_detected = false;
+    if (!layer) return;
+    
+    // Check each region for groove structure
+    for (const LayerRegion* region : layer->regions()) {
+        int external_count = 0;
+        int first_internal_count = 0;
+        int second_internal_count = 0;
+        
+        // Scan the perimeter entities
+        for (const ExtrusionEntity* entity : region->perimeters().entities) {
+            if (entity->role() == ExtrusionRole::ExternalPerimeter) {
+                external_count++;
+            } else if (entity->role() == ExtrusionRole::FirstInternalPerimeter) {
+                first_internal_count++;
+            } else if (entity->role() == ExtrusionRole::SecondInternalPerimeter) {
+                second_internal_count++;
+            }
             
-            groove_structure_detected = false;
-            if (!layer) return;
-            // Check each region for groove structure
-            for (const LayerRegion* region : layer->regions()) {
-                int external_count = 0;
-                int first_internal_count = 0;
-                int second_internal_count = 0;
-                // This is simplified - actual implementation would scan perimeter entities
-                // Looking for presence of all three types needed for groove
-                // If we find all three, we have a groove structure
-                if (external_count > 0 && first_internal_count > 0 && second_internal_count > 0) {
-                    groove_structure_detected = true;
-                    return;
+            // Also check collections recursively
+            if (entity->is_collection()) {
+                const ExtrusionEntityCollection* collection = 
+                    dynamic_cast<const ExtrusionEntityCollection*>(entity);
+                if (collection) {
+                    for (const ExtrusionEntity* sub_entity : collection->entities) {
+                        if (sub_entity->role() == ExtrusionRole::ExternalPerimeter) {
+                            external_count++;
+                        } else if (sub_entity->role() == ExtrusionRole::FirstInternalPerimeter) {
+                            first_internal_count++;
+                        } else if (sub_entity->role() == ExtrusionRole::SecondInternalPerimeter) {
+                            second_internal_count++;
+                        }
+                    }
                 }
             }
         }
+        
+        // If we find all three types, we have a groove structure
+        if (external_count > 0 && first_internal_count > 0 && second_internal_count > 0) {
+            groove_structure_detected = true;
+            return;
+        }
+    }
+}
 
     void GCodeGenerator::RegionTemperatureManager::buffer_line(
         const std::string& gcode, float time_ms, ExtrusionRole role, int target_temp) 
