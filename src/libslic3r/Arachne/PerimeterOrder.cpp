@@ -275,32 +275,37 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
             std::reverse(grouped_extrusions.back().extrusions.begin(), grouped_extrusions.back().extrusions.end());
     }
 
-    // After the swap/reverse logic on all groups
     if (swap_first_int_w_ext_perimeter) {
-        // Check for thin tube case
-        int groups_with_external = 0;
-        bool has_thin_group = false;
-
-        for (const auto& group : grouped_extrusions) {
-            if (group.external_perimeter_extrusion->is_external_perimeter()) {
-                groups_with_external++;
-                if (group.extrusions.size() <= 2) {  // External + maybe 1 internal
-                    has_thin_group = true;
-                }
+        // Analyze structure by actual depth, not array positions
+        std::vector<const PerimeterExtrusion*> externals;
+        std::vector<const PerimeterExtrusion*> first_internals; 
+        std::vector<const PerimeterExtrusion*> second_internals;
+        std::vector<const PerimeterExtrusion*> others;
+        
+        for (auto* e : grouped_extrusions.back().extrusions) {
+            if (e->is_external_perimeter()) {
+                externals.push_back(e);
+            } else if (e->is_first_internal_perimeter()) {
+                first_internals.push_back(e);
+            } else if (e->is_second_internal_perimeter()) {
+                second_internals.push_back(e);
+            } else {
+                others.push_back(e);
             }
         }
-
-        // If we have a thin tube (multiple external groups with few perimeters)
-        if (groups_with_external > 1 && has_thin_group) {
-            // Override the holes-first ordering for thin tubes
-            // Sort to put contours before holes
-            std::sort(grouped_extrusions.begin(), grouped_extrusions.end(),
-                      [](const GroupedPerimeterExtrusions& a, const GroupedPerimeterExtrusions& b) {
-                          // Contours (true) before holes (false)
-                          return a.external_perimeter_extrusion->is_contour() >
-                          b.external_perimeter_extrusion->is_contour();
-                      });
+        
+        // Only apply groove injection if we have all components
+        if (!externals.empty() && !first_internals.empty() && !second_internals.empty()) {
+            // Rebuild for groove injection (before reverse):
+            // First internals → Externals → Second internals → Others
+            std::vector<const PerimeterExtrusion*> reordered;
+            reordered.insert(reordered.end(), first_internals.begin(), first_internals.end());
+            reordered.insert(reordered.end(), externals.begin(), externals.end());
+            reordered.insert(reordered.end(), second_internals.begin(), second_internals.end());
+            reordered.insert(reordered.end(), others.begin(), others.end());
+            grouped_extrusions.back().extrusions = reordered;
         }
+        // else: Keep original order if no groove structure
     }
 
     const std::vector<size_t> grouped_extrusion_order = order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
