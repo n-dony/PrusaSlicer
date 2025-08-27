@@ -3441,7 +3441,9 @@ std::string GCodeGenerator::_extrude(
     const Geometry::ArcWelder::Path &path,
     const std::string_view           description,
     double                           speed,
-    const EmitModifiers             &emit_modifiers)
+    const EmitModifiers             &emit_modifiers,
+    const PrintRegionConfig* region_config = nullptr 
+)
 {
     std::string gcode;
     const std::string_view description_bridge = path_attr.role.is_bridge() ? " (bridge)"sv : ""sv;
