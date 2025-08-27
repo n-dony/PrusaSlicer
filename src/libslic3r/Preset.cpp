@@ -512,7 +512,7 @@ static std::vector<std::string> s_Preset_print_options {
     "top_one_perimeter_type", "only_one_perimeter_first_layer",
     "automatic_extrusion_widths", "automatic_infill_combination", "automatic_infill_combination_max_layer_height",
     "bed_temperature_extruder", "interlocking_beam", "interlocking_orientation", "interlocking_beam_layer_count", "interlocking_depth", "interlocking_boundary_avoidance", "interlocking_beam_width","enable_temperature_offsets",
-    "temperature_change_threshold","temperature_change_threshold",
+    "temperature_change_threshold","temperature_offset_layers",
     "temperature_wait_for_region_change",
     "external_perimeter_temperature_offset",
     "first_internal_perimeter_temperature_offset",
