@@ -251,14 +251,18 @@ namespace Slic3r {
     }
 
 
-    void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
-        {
-            if (config.enable_temperature_offsets && extruder_id >= 0) {
-                current_temperature =  (layer_index == 0) ?
-                config.first_layer_temperature.get_at(extruder_id) :
-                config.temperature.get_at(extruder_id);
-            }
-        }
+void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
+{
+    if (config.enable_temperature_offsets && extruder_id >= 0) {
+        current_temperature = (layer_index == 0) ? 
+            config.first_layer_temperature.get_at(extruder_id) : 
+            config.temperature.get_at(extruder_id);
+        enabled = true;
+    } else {
+        enabled = false;
+        current_temperature = 0;
+    }
+}
 
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
@@ -3557,12 +3561,12 @@ std::string GCodeGenerator::_extrude(
     }
     
     
-    if ((m_config.PrintConfig::enable_temperature_offsets || m_config.PrintRegionConfig::enable_temperature_offsets) && !(this->on_first_layer())  && m_writer.extruder() && m_layer_index > 0) {
-         // ---- THIS IS THE CRITICAL STEP THAT IS LIKELY MISSING OR IN THE WRONG PLACE ----
-        // Reset the temperature manager's state for EACH new layer.
-        m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
-        // --------------------------------------------------------------------------------
-
+    if ((m_config.enable_temperature_offsets || 
+         (region_config && region_config->enable_temperature_offsets)) && 
+         !this->on_first_layer() && 
+         m_writer.extruder() && 
+         m_layer_index > 0) {
+        
         float offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, 
             m_config,
@@ -3571,13 +3575,15 @@ std::string GCodeGenerator::_extrude(
             m_layer_index,
             (m_layer_count > 0) && (m_layer_index >= (m_layer_count - 1))
         );
-
+    
         if (offset != 0) {
             int base_temp = m_config.temperature.get_at(m_writer.extruder()->id());
             int target_temp = base_temp + static_cast<int>(offset);
-
-            if (std::abs(target_temp - m_temperature_manager.current_temperature) >= m_config.temperature_change_threshold) {
-                gcode += m_writer.set_temperature(target_temp, m_config.temperature_wait_for_region_change);
+        
+            if (std::abs(target_temp - m_temperature_manager.current_temperature) >= 
+                m_config.temperature_change_threshold) {
+                gcode += m_writer.set_temperature(target_temp, 
+                                                 m_config.temperature_wait_for_region_change);
                 m_temperature_manager.current_temperature = target_temp;
             }
         }
