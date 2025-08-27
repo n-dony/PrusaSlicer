@@ -1644,7 +1644,7 @@ void TabPrint::build()
     printf("DEBUG: Temperature GUI ");
     page = add_options_page(L("Temperature"), "cog");
         optgroup = page->new_optgroup(L("Temperature"));
-        optgroup->append_single_option_line("enable_temperature_offsets");
+        optgroup->append_single_option_line("");
         optgroup->append_single_option_line("temperature_change_threshold");
         optgroup->append_single_option_line("temperature_wait_for_region_change");
         printf("DEBUG: Temperature GUI A");

@@ -449,12 +449,13 @@ private:
     struct RegionTemperatureManager {
         bool enabled = false;
         int current_temperature = 0;
-        
+
         float get_temperature_offset(ExtrusionRole role, 
                                     const PrintConfig& config,
                                     const PrintRegionConfig* region_config,
                                     int extruder_id,
-                                    int layer_index) const;
+                                    int layer_index,
+                                    bool is_last_layer) const ;
         
         void reset() { enabled = false; current_temperature = 0; }
     };
