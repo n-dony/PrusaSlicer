@@ -56,7 +56,7 @@ static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &
     for (const auto& kvp : enum_keys_map)
         names[kvp.second] = kvp.first;
     return names;
-};
+}
 
 //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
 static const t_config_enum_values s_keys_map_TemperatureOffsetLayers {
