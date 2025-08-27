@@ -2890,7 +2890,7 @@ LayerResult GCodeGenerator::process_layer(
             m_avoid_crossing_perimeters.use_external_mp();
 
             for (const GCode::ExtrusionOrder::BrimPath &brim_path : extruder_extrusions.brim) {
-                gcode += this->extrude_smooth_path(brim_path.path, brim_path.is_loop, "brim", m_config.support_material_speed.value);
+                gcode += this->extrude_smooth_path(brim_path.path, brim_path.is_loop, "brim", m_config.support_material_speed.value, nullptr);
             }
             m_avoid_crossing_perimeters.use_external_mp(false);
             // Allow a straight travel move to the first object point.
@@ -3217,7 +3217,7 @@ std::string GCodeGenerator::extrude_skirt(
         el.path_attributes.height = extrusion_flow_override.height;
     }
 
-    gcode += this->extrude_smooth_path(smooth_path, true, "skirt"sv, m_config.support_material_speed.value);
+    gcode += this->extrude_smooth_path(smooth_path, true, "skirt"sv, m_config.support_material_speed.value, nullptr);
 
     return gcode;
 }
@@ -3231,7 +3231,7 @@ std::string GCodeGenerator::extrude_infill_ranges(
         if (!infill_range.items.empty()) {
             this->m_config.apply(infill_range.region->config());
             for (const GCode::SmoothPath &path : infill_range.items) {
-                gcode += this->extrude_smooth_path(path, false, comment, -1.0);
+                gcode += this->extrude_smooth_path(path, false, comment, -1.0, &infill_range.region->config());
             }
         }
     }
@@ -3254,7 +3254,7 @@ std::string GCodeGenerator::extrude_perimeters(
         // Apply the small perimeter speed.
         if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)
             speed = m_config.small_perimeter_speed.get_abs_value(m_config.perimeter_speed);
-        gcode += this->extrude_smooth_path(perimeter.smooth_path, perimeter.extrusion_entity->is_loop(), comment_perimeter, speed, perimeter.wipe_offset);
+        gcode += this->extrude_smooth_path(perimeter.smooth_path, perimeter.extrusion_entity->is_loop(), comment_perimeter, speed, &region.config(), perimeter.wipe_offset);
         this->m_travel_obstacle_tracker.mark_extruded(
             perimeter.extrusion_entity, print_instance.object_layer_to_print_id, print_instance.instance_id
         );
@@ -3296,7 +3296,7 @@ std::string GCodeGenerator::extrude_support(const std::vector<GCode::ExtrusionOr
         for (const GCode::ExtrusionOrder::SupportPath &path : support_extrusions) {
             const auto   label = path.is_interface ?  support_interface_label : support_label;
             const double speed = path.is_interface ? support_interface_speed : support_speed;
-            gcode += this->extrude_smooth_path(path.path, false, label, speed);
+            gcode += this->extrude_smooth_path(path.path, false, label, speed, nullptr);
         }
     }
     return gcode;
