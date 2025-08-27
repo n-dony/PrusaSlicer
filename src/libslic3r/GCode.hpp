@@ -456,7 +456,7 @@ private:
                                     int extruder_id,
                                     int layer_index,
                                     bool is_last_layer) const ;
-        
+        void init_layer(const PrintConfig& config, int layer_index, int extruder_id) const;
         void reset() { enabled = false; current_temperature = 0; }
     };
     
