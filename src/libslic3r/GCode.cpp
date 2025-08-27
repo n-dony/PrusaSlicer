@@ -253,17 +253,19 @@ namespace Slic3r {
 
 void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
 {
-    if (config.enable_temperature_offsets && extruder_id >= 0) {
+    if (extruder_id >= 0) {
+        // Always set the correct base temperature
         current_temperature = (layer_index == 0) ? 
             config.first_layer_temperature.get_at(extruder_id) : 
             config.temperature.get_at(extruder_id);
-        enabled = true;
+        
+        // Only enable offset calculations if configured
+        enabled = config.enable_temperature_offsets;
     } else {
         enabled = false;
-        current_temperature = 0;
+        current_temperature = 0;  // Only set to 0 if invalid extruder_id
     }
 }
-
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
@@ -3561,12 +3563,12 @@ std::string GCodeGenerator::_extrude(
     }
     
     
-    if ((m_config.enable_temperature_offsets || 
+    if ((static_cast<const PrintConfig&>(m_config).enable_temperature_offsets || 
          (region_config && region_config->enable_temperature_offsets)) && 
          !this->on_first_layer() && 
          m_writer.extruder() && 
          m_layer_index > 0) {
-        
+
         float offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, 
             m_config,
@@ -3575,7 +3577,7 @@ std::string GCodeGenerator::_extrude(
             m_layer_index,
             (m_layer_count > 0) && (m_layer_index >= (m_layer_count - 1))
         );
-    
+
         if (offset != 0) {
             int base_temp = m_config.temperature.get_at(m_writer.extruder()->id());
             int target_temp = base_temp + static_cast<int>(offset);
