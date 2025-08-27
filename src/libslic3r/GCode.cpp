@@ -3560,7 +3560,7 @@ std::string GCodeGenerator::_extrude(
     if ((m_config.PrintConfig::enable_temperature_offsets || m_config.PrintRegionConfig::enable_temperature_offsets) && !(this->on_first_layer())  && m_writer.extruder() && m_layer_index > 0) {
          // ---- THIS IS THE CRITICAL STEP THAT IS LIKELY MISSING OR IN THE WRONG PLACE ----
         // Reset the temperature manager's state for EACH new layer.
-        m_temperature_manager.init_layer(m_config, layer_id, current_extruder_id);
+        m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
         // --------------------------------------------------------------------------------
 
         float offset = m_temperature_manager.get_temperature_offset(
