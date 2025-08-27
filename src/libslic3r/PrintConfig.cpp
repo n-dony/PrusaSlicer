@@ -58,10 +58,10 @@ static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &
     return names;
 };
 
-static const t_config_enum_values s_keys_map_TemperatureOffsetLayers = {
+//{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
+static const t_config_enum_values s_keys_map_TemperatureOffsetLayers {
     { "all",            static_cast<int>(TemperatureOffsetLayers::All) },
     { "skip_topmost",   static_cast<int>(TemperatureOffsetLayers::SkipTopmost) }
-    //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TemperatureOffsetLayers)
 
