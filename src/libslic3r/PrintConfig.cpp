@@ -58,6 +58,16 @@ static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &
     return names;
 }
 
+
+template<> const t_config_enum_values& ConfigOptionEnum<TemperatureOffsetLayers>::get_enum_values() {
+    static const t_config_enum_values keys_map = {
+        { "all",            static_cast<int>(TemperatureOffsetLayers::All) },
+        { "skip_topmost",   static_cast<int>(TemperatureOffsetLayers::SkipTopmost) }
+        //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
+    };
+    return keys_map;
+}
+
 #define CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(NAME) \
     static t_config_enum_names s_keys_names_##NAME = enum_names_from_keys_map(s_keys_map_##NAME); \
     template<> const t_config_enum_values& ConfigOptionEnum<NAME>::get_enum_values() { return s_keys_map_##NAME; } \
@@ -1752,6 +1762,19 @@ void PrintConfigDef::init_fff_params()
                    "When disabled, all temperature offsets are ignored.");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("temperature_offset_layers", coEnum);
+    def->label = L("Apply temperature offsets to");
+    def->tooltip = L("Control which layers receive temperature offsets. "
+                    "First layer is always excluded.");
+    def->mode = comExpert;
+    def->set_enum<TemperatureOffsetLayers>({
+        { "all",          L("All layers (except first)") },
+        { "skip_topmost", L("Skip topmost layer") },
+        { "skip_top",     L("Skip top surfaces") }
+    });
+    def->set_default_value(new ConfigOptionEnum<TemperatureOffsetLayers>(TemperatureOffsetLayers::All));
+    
 
     def = this->add("temperature_change_threshold", coFloat);
     def->label = L("Temperature change threshold");

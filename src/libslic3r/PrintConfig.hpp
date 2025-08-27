@@ -271,6 +271,12 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(EnsureVerticalShellThickness)
 
 #undef CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS
 
+enum class TemperatureOffsetLayers {
+    All = 0,
+    SkipTopmost = 1
+//    SkipTopSurfaces = 2
+};
+
 class DynamicPrintConfig;
 
 // Defines each and every confiuration option of Slic3r, including the properties of the GUI dialogs.
@@ -713,8 +719,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent, second_internal_perimeter_speed))
     ((ConfigOptionFloat,          second_internal_perimeter_acceleration))
     ((ConfigOptionBool,           enable_temperature_offsets))
-    ((ConfigOptionFloat,          temperature_change_threshold))
-    ((ConfigOptionBool,           temperature_wait_for_region_change))
     ((ConfigOptionFloats,         external_perimeter_temperature_offset))
     ((ConfigOptionFloats,         first_internal_perimeter_temperature_offset))
     ((ConfigOptionFloats,         second_internal_perimeter_temperature_offset))

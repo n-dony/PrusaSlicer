@@ -186,10 +186,16 @@ namespace Slic3r {
         const PrintConfig& config,
         const PrintRegionConfig* region_config, 
         int extruder_id,
-        int layer_index) const
+        int layer_index,
+        bool is_last_layer) const  // Add this
     {
-        // No offsets on first layer
+        // Skip first layer always
         if (layer_index == 0) return 0;
+
+        // Skip topmost layer if configured
+        if (is_last_layer && config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost) {
+            return 0;
+        }
 
         // Check if offsets are enabled
         bool use_region = region_config && region_config->enable_temperature_offsets;
@@ -250,7 +256,7 @@ namespace Slic3r {
             if (!enabled || !config.enable_temperature_offsets)
                 return "";
 
-            int target_temp = get_temperature_for_role(role, config, extruder_id);
+            int target_temp = get_temperature_offset(role, config, extruder_id);
 
             if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
                 current_temperature = target_temp;
@@ -3572,11 +3578,24 @@ std::string GCodeGenerator::_extrude(
         }
     }
     
-    // Add temperature management for region changes
-    if (m_config.enable_temperature_offsets && m_writer.extruder()) {
-        gcode += m_temperature_manager.set_temperature_if_needed(
-            m_writer, path_attr.role, m_config, m_writer.extruder()->id()
+    if (m_config.enable_temperature_offsets && m_writer.extruder() && m_layer_index > 0) {
+        float offset = m_temperature_manager.get_temperature_offset(
+            path_attr.role, 
+            m_config,
+            region_config, 
+            m_writer.extruder()->id(),
+            m_layer_index
         );
+        
+        if (offset != 0) {
+            int base_temp = m_writer.extruder()->temperature();
+            int target_temp = base_temp + static_cast<int>(offset);
+            
+            if (std::abs(target_temp - m_temperature_manager.current_temperature) >= m_config.temperature_change_threshold) {
+                gcode += m_writer.set_temperature(target_temp, m_config.temperature_wait_for_region_change);
+                m_temperature_manager.current_temperature = target_temp;
+            }
+        }
     }
     
     if (m_volumetric_speed != 0. && speed == 0)
