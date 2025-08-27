@@ -197,6 +197,12 @@ enum class TopOnePerimeterType
     Count
 };
 
+enum class TemperatureOffsetLayers
+{
+    All,
+    SkipTopmost
+};
+
 enum class GCodeThumbnailsFormat {
     PNG, JPG, QOI
 };
