@@ -58,20 +58,14 @@ static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &
     return names;
 }
 
+static const t_config_enum_values s_keys_map_TemperatureOffsetLayers = {
+    { "all",            static_cast<int>(TemperatureOffsetLayers::All) },
+    { "skip_topmost",   static_cast<int>(TemperatureOffsetLayers::SkipTopmost) }
+    //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
+};
 
-template<> const t_config_enum_values& ConfigOptionEnum<TemperatureOffsetLayers>::get_enum_values() {
-    static const t_config_enum_values keys_map = {
-        { "all",            static_cast<int>(TemperatureOffsetLayers::All) },
-        { "skip_topmost",   static_cast<int>(TemperatureOffsetLayers::SkipTopmost) }
-        //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
-    };
-    return keys_map;
-}
-
-#define CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(NAME) \
-    static t_config_enum_names s_keys_names_##NAME = enum_names_from_keys_map(s_keys_map_##NAME); \
-    template<> const t_config_enum_values& ConfigOptionEnum<NAME>::get_enum_values() { return s_keys_map_##NAME; } \
-    template<> const t_config_enum_names& ConfigOptionEnum<NAME>::get_enum_names() { return s_keys_names_##NAME; }
+// 2. Use the macro to generate both required functions.
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TemperatureOffsetLayers)
 
 static const t_config_enum_values s_keys_map_ArcFittingType {
     { "disabled",       int(ArcFittingType::Disabled) },
