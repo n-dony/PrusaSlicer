@@ -3557,7 +3557,7 @@ std::string GCodeGenerator::_extrude(
     }
     
     
-    if ((m_config.PrintConfig::enable_temperature_offsets || m_config.PrintRegionConfig::enable_temperature_offsets) && m_writer.extruder() && m_layer_index > 0) {
+    if ((m_config.PrintConfig::enable_temperature_offsets || m_config.PrintRegionConfig::enable_temperature_offsets) && !(this->on_first_layer())  && m_writer.extruder() && m_layer_index > 0) {
         float offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, 
             m_config,

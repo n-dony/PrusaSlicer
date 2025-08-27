@@ -742,6 +742,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 swap_first_int_w_ext_perimeter))
     ((ConfigOptionBool,                 reverse_internal_perimeters))
     ((ConfigOptionInt,                  reverse_internal_perimeters_at))
+    ((ConfigOptionEnum<temperatureOffsetLayers>, temperatureoffsetlayers))
     ((ConfigOptionBool,                 external_perimeters_first))
     ((ConfigOptionBool,                 extra_perimeters))
     ((ConfigOptionBool,                 extra_perimeters_on_overhangs))
