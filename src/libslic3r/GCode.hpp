@@ -170,6 +170,21 @@ public:
     using ObjectsLayerToPrint = GCode::ObjectsLayerToPrint;
 
     std::optional<Point> last_position;
+    struct EmitModifiers {
+        EmitModifiers(bool emit_fan_speed_reset, bool emit_bridge_fan_start, bool emit_bridge_fan_end)
+            : emit_fan_speed_reset(emit_fan_speed_reset), emit_bridge_fan_start(emit_bridge_fan_start), emit_bridge_fan_end(emit_bridge_fan_end) {}
+
+        EmitModifiers() : EmitModifiers(true, true, true) {};
+
+        static EmitModifiers create_with_disabled_emits() {
+            return {false, false, false};
+        }
+
+        bool emit_fan_speed_reset  = true;
+
+        bool emit_bridge_fan_start = true;
+        bool emit_bridge_fan_end   = true;
+    };
 
 private:
     using InstanceToPrint = GCode::InstanceToPrint;
@@ -491,21 +506,7 @@ private:
     // Back-pointer to Print (const).
     const Print*                        m_print;
 
-    struct EmitModifiers {
-        EmitModifiers(bool emit_fan_speed_reset, bool emit_bridge_fan_start, bool emit_bridge_fan_end)
-            : emit_fan_speed_reset(emit_fan_speed_reset), emit_bridge_fan_start(emit_bridge_fan_start), emit_bridge_fan_end(emit_bridge_fan_end) {}
-
-        EmitModifiers() : EmitModifiers(true, true, true) {};
-
-        static EmitModifiers create_with_disabled_emits() {
-            return {false, false, false};
-        }
-
-        bool emit_fan_speed_reset  = true;
-
-        bool emit_bridge_fan_start = true;
-        bool emit_bridge_fan_end   = true;
-    };
+ 
 
     std::string                         _extrude(const ExtrusionAttributes &attribs, const Geometry::ArcWelder::Path &path, std::string_view description, double speed, const EmitModifiers &emit_modifiers = EmitModifiers());
 
