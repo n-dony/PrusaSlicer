@@ -303,7 +303,7 @@ private:
         const bool is_loop,
         const std::string_view description,
         const double speed,
-        const PrintRegionConfig* region_config,
+        const PrintRegionConfig* region_config = nullptr,
         const std::size_t wipe_offset = 0
     );
     std::string extrude_skirt(
