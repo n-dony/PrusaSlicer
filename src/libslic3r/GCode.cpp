@@ -178,61 +178,71 @@ namespace Slic3r {
 
     const std::vector<std::string> ColorPrintColors::Colors = { "#C0392B", "#E67E22", "#F1C40F", "#27AE60", "#1ABC9C", "#2980B9", "#9B59B6" };
 
-#define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
+    #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
 
-// RegionTemperatureManager implementation
-    int GCodeGenerator::RegionTemperatureManager::get_temperature_for_role(
-        ExtrusionRole role, const PrintConfig& config, int extruder_id) const
-        {
-            if (!enabled || extruder_id < 0)
-                return base_temperature;
-            printf("DEBUG: Manager A ");
-            float offset = 0;
+    // RegionTemperatureManager implementation
+    float GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
+        ExtrusionRole role, 
+        const PrintConfig& config,
+        const PrintRegionConfig* region_config, 
+        int extruder_id,
+        int layer_index) const
+    {
+        // No offsets on first layer
+        if (layer_index == 0) return 0;
 
-            // Safely check size before accessing
-            auto safe_get = [extruder_id](const ConfigOptionFloats& opt) -> float {
-                if (opt.values.empty())
-                    return 0;
-                return (extruder_id < opt.values.size()) ?
-                opt.values[extruder_id] : opt.values[0];
-            };
+        // Check if offsets are enabled
+        bool use_region = region_config && region_config->enable_temperature_offsets;
+        bool use_global = config.enable_temperature_offsets;
 
-            // Direct comparison with ExtrusionRole constants, just like PrusaSlicer does
-            if (role == ExtrusionRole::ExternalPerimeter) {
-                offset = safe_get(config.external_perimeter_temperature_offset);
-            } else if (role == ExtrusionRole::FirstInternalPerimeter) {
-                offset = safe_get(config.first_internal_perimeter_temperature_offset);
-            } else if (role == ExtrusionRole::SecondInternalPerimeter) {
-                offset = safe_get(config.second_internal_perimeter_temperature_offset);
-            } else if (role == ExtrusionRole::Perimeter) {
-                offset = safe_get(config.perimeter_temperature_offset);
-            } else if (role == ExtrusionRole::OverhangPerimeter) {
-                offset = safe_get(config.overhang_perimeter_temperature_offset);
-            } else if (role == ExtrusionRole::InternalInfill) {
-                offset = safe_get(config.infill_temperature_offset);
-            } else if (role == ExtrusionRole::SolidInfill) {
-                offset = safe_get(config.solid_infill_temperature_offset);
-            } else if (role == ExtrusionRole::TopSolidInfill) {
-                offset = safe_get(config.top_solid_infill_temperature_offset);
-            } else if (role == ExtrusionRole::SupportMaterial) {
-                offset = safe_get(config.support_material_temperature_offset);
-            } else if (role == ExtrusionRole::SupportMaterialInterface) {
-                offset = safe_get(config.support_material_interface_temperature_offset);
-            } else if (role == ExtrusionRole::BridgeInfill) {
-                offset = safe_get(config.bridge_temperature_offset);
-            } else if (role == ExtrusionRole::GapFill) {
-                offset = safe_get(config.gap_fill_temperature_offset);
-            } else if (role == ExtrusionRole::Ironing) {
-                offset = safe_get(config.ironing_temperature_offset);
-            } else {
-                // For any other roles, no offset
-                offset = 0;
-            }
-            printf("DEBUG: Manager B ");
+        if (!use_region && !use_global) return 0;
 
-            return base_temperature + static_cast<int>(offset);
+        float offset = 0;
+
+        // Helper to safely get offset value from config
+        auto safe_get = [extruder_id](const ConfigOptionFloats& opt) -> float {
+            if (opt.values.empty()) return 0;
+            return (extruder_id < opt.values.size()) ? 
+                   opt.values[extruder_id] : opt.values[0];
+        };
+
+        // For now, since region_config might not have all offset fields yet,
+        // just use global config. Once you add the fields to PrintRegionConfig,
+        // you can add the regional override logic
+
+        if (role == ExtrusionRole::ExternalPerimeter) {
+            offset = safe_get(config.external_perimeter_temperature_offset);
+        } else if (role == ExtrusionRole::FirstInternalPerimeter) {
+            offset = safe_get(config.first_internal_perimeter_temperature_offset);
+        } else if (role == ExtrusionRole::SecondInternalPerimeter) {
+            offset = safe_get(config.second_internal_perimeter_temperature_offset);
+        } else if (role == ExtrusionRole::Perimeter) {
+            offset = safe_get(config.perimeter_temperature_offset);
+        } else if (role == ExtrusionRole::OverhangPerimeter) {
+            offset = safe_get(config.overhang_perimeter_temperature_offset);
+        } else if (role == ExtrusionRole::InternalInfill) {
+            offset = safe_get(config.infill_temperature_offset);
+        } else if (role == ExtrusionRole::SolidInfill) {
+            offset = safe_get(config.solid_infill_temperature_offset);
+        } else if (role == ExtrusionRole::TopSolidInfill) {
+            offset = safe_get(config.top_solid_infill_temperature_offset);
+        } else if (role == ExtrusionRole::SupportMaterial) {
+            offset = safe_get(config.support_material_temperature_offset);
+        } else if (role == ExtrusionRole::SupportMaterialInterface) {
+            offset = safe_get(config.support_material_interface_temperature_offset);
+        } else if (role == ExtrusionRole::BridgeInfill) {
+            offset = safe_get(config.bridge_temperature_offset);
+        } else if (role == ExtrusionRole::GapFill) {
+            offset = safe_get(config.gap_fill_temperature_offset);
+        } else if (role == ExtrusionRole::Ironing) {
+            offset = safe_get(config.ironing_temperature_offset);
+        } else {
+            // For any other roles, no offset
+            offset = 0;
         }
 
+        return offset;
+    }
 
     std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
             GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)

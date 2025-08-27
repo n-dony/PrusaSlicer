@@ -447,28 +447,16 @@ private:
     bool                                m_moved_to_first_layer_point{false};
 
     struct RegionTemperatureManager {
-        int base_temperature = 0;
-        int current_temperature = 0;
-        ExtrusionRole last_role = ExtrusionRole::None;
         bool enabled = false;
+        int current_temperature = 0;
         
-        int get_temperature_for_role(ExtrusionRole role, const PrintConfig& config, int extruder_id) const;
+        float get_temperature_offset(ExtrusionRole role, 
+                                    const PrintConfig& config,
+                                    const PrintRegionConfig* region_config,
+                                    int extruder_id,
+                                    int layer_index) const;
         
-        bool should_change_temperature(int new_temp, float threshold) const {
-            return std::abs(new_temp - current_temperature) >= threshold;
-        }
-        
-        std::string set_temperature_if_needed(GCodeWriter& writer, ExtrusionRole role, 
-                                             const PrintConfig& config, int extruder_id);
-        
-        void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
-        
-        void reset() {
-            base_temperature = 0;
-            current_temperature = 0;
-            last_role = ExtrusionRole::None;
-            enabled = false;
-        }
+        void reset() { enabled = false; current_temperature = 0; }
     };
     
     RegionTemperatureManager m_temperature_manager;
