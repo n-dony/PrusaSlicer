@@ -3563,7 +3563,8 @@ std::string GCodeGenerator::_extrude(
             m_config,
             region_config, 
             m_writer.extruder()->id(),
-            m_layer_index
+            m_layer_index,
+            (m_layer_count > 0) && (m_layer_index >= (m_layer_count - 1))
         );
 
         if (offset != 0) {
