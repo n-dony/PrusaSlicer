@@ -1768,7 +1768,6 @@ void PrintConfigDef::init_fff_params()
     def->set_enum<TemperatureOffsetLayers>({
         { "all",          L("All layers (except first)") },
         { "skip_topmost", L("Skip topmost layer") },
-        { "skip_top",     L("Skip top surfaces") }
     });
     def->set_default_value(new ConfigOptionEnum<TemperatureOffsetLayers>(TemperatureOffsetLayers::All));
     

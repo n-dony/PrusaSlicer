@@ -190,7 +190,7 @@ namespace Slic3r {
         bool is_last_layer) const  // Add this
     {
         // Skip first layer always
-        if (layer_index == 0 || is_last_layer) return 0;
+        if (layer_index == 0 || is_last_layer) return 0.0f;
 
         // Skip topmost layer if configured
         //if (is_last_layer) { //&& region_config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost) {
@@ -3558,6 +3558,11 @@ std::string GCodeGenerator::_extrude(
     
     
     if ((m_config.PrintConfig::enable_temperature_offsets || m_config.PrintRegionConfig::enable_temperature_offsets) && !(this->on_first_layer())  && m_writer.extruder() && m_layer_index > 0) {
+         // ---- THIS IS THE CRITICAL STEP THAT IS LIKELY MISSING OR IN THE WRONG PLACE ----
+        // Reset the temperature manager's state for EACH new layer.
+        m_temperature_manager.init_layer(m_config, layer_id, current_extruder_id);
+        // --------------------------------------------------------------------------------
+
         float offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, 
             m_config,
