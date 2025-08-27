@@ -3153,6 +3153,7 @@ std::string GCodeGenerator::extrude_smooth_path(
     const bool is_loop,
     const std::string_view description,
     const double speed,
+    const PrintRegionConfig* region_config,
     const std::size_t wipe_offset
 ) {
     std::string gcode;
@@ -3184,7 +3185,7 @@ std::string GCodeGenerator::extrude_smooth_path(
             emit_modifiers.emit_fan_speed_reset = true;
         }
 
-        gcode += this->_extrude(el_it->path_attributes, el_it->path, description, speed, emit_modifiers);
+        gcode += this->_extrude(el_it->path_attributes, el_it->path, description, speed, emit_modifiers, region_config);
     }
 
     // reset acceleration

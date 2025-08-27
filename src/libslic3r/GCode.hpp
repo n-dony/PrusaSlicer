@@ -508,7 +508,7 @@ private:
 
  
 
-    std::string _extrude(const ExtrusionAttributes &attribs, const Geometry::ArcWelder::Path &path, std::string_view description, double speed, const EmitModifiers &emit_modifiers = EmitModifiers());
+    std::string _extrude(const ExtrusionAttributes &attribs, const Geometry::ArcWelder::Path &path, std::string_view description, double speed, const EmitModifiers &emit_modifiers = EmitModifiers(), const PrintRegionConfig* region_config = nullptr);
 
     void                                print_machine_envelope(GCodeOutputStream &file, const Print &print);
     std::string                         _process_start_gcode(const Print &print, unsigned int current_extruder_id);
