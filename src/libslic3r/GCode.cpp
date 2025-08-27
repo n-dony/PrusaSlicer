@@ -190,12 +190,12 @@ namespace Slic3r {
         bool is_last_layer) const  // Add this
     {
         // Skip first layer always
-        if (layer_index == 0) return 0;
+        if (layer_index == 0 || is_last_layer) return 0;
 
         // Skip topmost layer if configured
-        if (is_last_layer && config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost) {
-            return 0;
-        }
+        //if (is_last_layer) { //&& region_config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost) {
+        //    return 0;
+        //}
 
         // Check if offsets are enabled
         bool use_region = region_config && region_config->enable_temperature_offsets;
@@ -3586,11 +3586,11 @@ std::string GCodeGenerator::_extrude(
             m_writer.extruder()->id(),
             m_layer_index
         );
-        
+
         if (offset != 0) {
             int base_temp = m_writer.extruder()->temperature();
             int target_temp = base_temp + static_cast<int>(offset);
-            
+
             if (std::abs(target_temp - m_temperature_manager.current_temperature) >= m_config.temperature_change_threshold) {
                 gcode += m_writer.set_temperature(target_temp, m_config.temperature_wait_for_region_change);
                 m_temperature_manager.current_temperature = target_temp;
