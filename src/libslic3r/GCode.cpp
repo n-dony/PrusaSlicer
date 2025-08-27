@@ -3442,7 +3442,7 @@ std::string GCodeGenerator::_extrude(
     const std::string_view           description,
     double                           speed,
     const EmitModifiers             &emit_modifiers,
-    const PrintRegionConfig* region_config = nullptr 
+    const PrintRegionConfig* region_config 
 )
 {
     std::string gcode;
