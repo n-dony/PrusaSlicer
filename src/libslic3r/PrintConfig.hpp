@@ -197,10 +197,10 @@ enum class TopOnePerimeterType
     Count
 };
 
-enum class TemperatureOffsetLayers
-{
+enum class TemperatureOffsetLayers {
     All,
     SkipTopmost
+//    SkipTopSurfaces = 2
 };
 
 enum class GCodeThumbnailsFormat {
@@ -278,11 +278,6 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(EnsureVerticalShellThickness)
 
 #undef CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS
 
-enum class TemperatureOffsetLayers {
-    All = 0,
-    SkipTopmost = 1
-//    SkipTopSurfaces = 2
-};
 
 class DynamicPrintConfig;
 
