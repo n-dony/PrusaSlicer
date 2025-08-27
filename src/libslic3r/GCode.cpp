@@ -250,29 +250,6 @@ namespace Slic3r {
         return offset;
     }
 
-    std::string GCodeGenerator::RegionTemperatureManager::set_temperature_if_needed(
-            GCodeWriter& writer, ExtrusionRole role, const PrintConfig& config, int extruder_id)
-        {
-            if (!enabled || !config.enable_temperature_offsets)
-                return "";
-
-            int target_temp = get_temperature_offset(role, config, extruder_id);
-
-            if (std::abs(target_temp - current_temperature) >= config.temperature_change_threshold) {
-                current_temperature = target_temp;
-                last_role = role;
-
-                // Convert ExtrusionRole to GCodeExtrusionRole for string output
-                // Use the existing conversion function from ExtrusionRole.cpp
-                GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(role);
-
-                // Now use the string conversion function
-                std::string gcode = "; Temperature change for " + gcode_extrusion_role_to_string(gcode_role) + "\n";
-                gcode += writer.set_temperature(target_temp, config.temperature_wait_for_region_change, extruder_id);
-                return gcode;
-            }
-            return "";
-        }
 
     void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
         {
