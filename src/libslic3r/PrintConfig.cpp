@@ -63,8 +63,6 @@ static const t_config_enum_values s_keys_map_TemperatureOffsetLayers = {
     { "skip_topmost",   static_cast<int>(TemperatureOffsetLayers::SkipTopmost) }
     //{ "skip_top",       static_cast<int>(TemperatureOffsetLayers::SkipTopSurfaces) }
 };
-
-// 2. Use the macro to generate both required functions.
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TemperatureOffsetLayers)
 
 static const t_config_enum_values s_keys_map_ArcFittingType {
