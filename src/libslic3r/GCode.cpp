@@ -254,11 +254,9 @@ namespace Slic3r {
     void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
         {
             if (config.enable_temperature_offsets && extruder_id >= 0) {
-                enabled = true;
-                base_temperature = (layer_index == 0) ?
+                current_temperature =  (layer_index == 0) ?
                 config.first_layer_temperature.get_at(extruder_id) :
                 config.temperature.get_at(extruder_id);
-                current_temperature = base_temperature;
             }
         }
 
