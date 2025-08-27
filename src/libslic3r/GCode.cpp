@@ -3564,7 +3564,7 @@ std::string GCodeGenerator::_extrude(
         );
 
         if (offset != 0) {
-            int base_temp = m_writer.extruder()->temperature();
+            int base_temp = m_config.temperature.get_at(m_writer.extruder()->id());
             int target_temp = base_temp + static_cast<int>(offset);
 
             if (std::abs(target_temp - m_temperature_manager.current_temperature) >= m_config.temperature_change_threshold) {
