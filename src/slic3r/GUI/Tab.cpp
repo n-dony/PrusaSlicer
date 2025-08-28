@@ -1481,7 +1481,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse_internal_perimeters");
         optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse_internal_perimeters_at");
 
-        optgroup->append_single_option_line("TemperatureOffsetLayers", category_path + "temperatureoffsetlayers");
+        optgroup->append_single_option_line("temperature_offset_layers", category_path + "temperature_offset_layers");
         //optgroup->append_single_option_line("only_one_perimeter_first_layer", category_path + "only-one-perimeter-first-layer");
 
         optgroup->append_single_option_line("external_perimeters_first", category_path + "external-perimeters-first");
