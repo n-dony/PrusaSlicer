@@ -1644,13 +1644,14 @@ void TabPrint::build()
         optgroup->append_single_option_line("max_volumetric_extrusion_rate_slope_positive", "pressure-equlizer_331504");
         optgroup->append_single_option_line("max_volumetric_extrusion_rate_slope_negative", "pressure-equlizer_331504");
 
-    printf("DEBUG: Temperature GUI ");
+
     page = add_options_page(L("Temperature"), "cog");
         optgroup = page->new_optgroup(L("Temperature"));
-        optgroup->append_single_option_line("");
+        optgroup->append_single_option_line("enable_temperature_offsets");         // If not already there
+        optgroup->append_single_option_line("temperature_offset_layers");   
         optgroup->append_single_option_line("temperature_change_threshold");
         optgroup->append_single_option_line("temperature_wait_for_region_change");
-        printf("DEBUG: Temperature GUI A");
+
         optgroup = page->new_optgroup(L("Temperature offsets"));
         optgroup->append_single_option_line("external_perimeter_temperature_offset");
         optgroup->append_single_option_line("first_internal_perimeter_temperature_offset");
@@ -1665,7 +1666,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("overhang_perimeter_temperature_offset");  // ADD THIS
         optgroup->append_single_option_line("gap_fill_temperature_offset");            // ADD THIS
         optgroup->append_single_option_line("ironing_temperature_offset");             // ADD THIS
-        printf("DEBUG: Temperature GUI B");
 
     page = add_options_page(L("Multiple Extruders"), "funnel");
         optgroup = page->new_optgroup(L("Extruders"));
