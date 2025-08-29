@@ -75,7 +75,7 @@ struct WallGroup {
     size_t region_id;
     
     // Apply ordering within THIS WALL only
-    void optimize_order(const PrintConfig& config) {
+    void optimize_order(const PrintRegionConfig& config) {
         // Sort by depth
         std::sort(perimeters.begin(), perimeters.end(),
                  [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
