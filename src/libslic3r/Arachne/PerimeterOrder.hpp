@@ -68,7 +68,7 @@ struct PerimeterExtrusion
         return depth;
     }
 };
-
+/*
 struct WallGroup {
     std::vector<PerimeterExtrusion*> perimeters;
     size_t wall_id;
@@ -119,7 +119,7 @@ private:
         }
     }
 };
-
+*/
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
 
 PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first,  bool swap_first_int_w_ext_perimeter,  bool reverse_internal_perimeters, int reverse_internal_perimeters_at);
