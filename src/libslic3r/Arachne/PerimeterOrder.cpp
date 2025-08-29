@@ -262,7 +262,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
                 std::vector<const PerimeterExtrusion *> adjacent_extrusions = 
                     ordered_perimeter_extrusions_to_minimize_distances(Point::Zero(), available_candidates);
                 for (auto extrusion_it = adjacent_extrusions.rbegin(); extrusion_it != adjacent_extrusions.rend(); ++extrusion_it) {
-                    stack.push(*extrusion_it);
+                    stack.push_back(*extrusion_it);
                 }
             }
         }

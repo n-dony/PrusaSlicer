@@ -24,6 +24,9 @@ struct PerimeterExtrusion
     size_t depth;  // WE ALREADY HAVE THIS!
     std::vector<PerimeterExtrusion *> adjacent_perimeter_extrusions;
     PerimeterExtrusion *nearest_external_perimeter;
+
+    PerimeterExtrusion(const ExtrusionLine& line, double a, const Polygon& poly, const BoundingBox& box)
+        : extrusion(line), area(a), polygon(poly), bbox(box) {}
     
     // Existing methods
     bool is_contour() const { return extrusion.is_contour(); }
@@ -67,6 +70,9 @@ struct PerimeterExtrusion
         // 0 = external, 1 = first_internal, 2 = second_internal, etc.
         return depth;
     }
+
+    
+
 };
 /*
 struct WallGroup {
