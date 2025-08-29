@@ -81,7 +81,7 @@ static void assign_nearest_external_perimeter(PerimeterExtrusions &sorted_perime
         if (perimeter_extrusion.is_external_perimeter()) {
             perimeter_extrusion.depth                      = 0;
             perimeter_extrusion.nearest_external_perimeter = &perimeter_extrusion;
-            stack.push(&perimeter_extrusion);
+            stack.push_back(&perimeter_extrusion);
         }
     }
 
@@ -97,10 +97,10 @@ static void assign_nearest_external_perimeter(PerimeterExtrusions &sorted_perime
             if (adjacent_extrusion_depth < adjacent_extrusion->depth) {
                 adjacent_extrusion->nearest_external_perimeter = current_extrusion->nearest_external_perimeter;
                 adjacent_extrusion->depth                      = adjacent_extrusion_depth;
-                stack.push(adjacent_extrusion);
+                stack.push_back(adjacent_extrusion);
             } else if (adjacent_extrusion_depth == adjacent_extrusion->depth && !adjacent_extrusion->nearest_external_perimeter->is_contour() && current_extrusion->is_contour()) {
                 adjacent_extrusion->nearest_external_perimeter = current_extrusion->nearest_external_perimeter;
-                stack.push(adjacent_extrusion);
+                stack.push_back(adjacent_extrusion);
             }
         }
     }
