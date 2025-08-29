@@ -81,7 +81,7 @@ static void assign_nearest_external_perimeter(PerimeterExtrusions &sorted_perime
         if (perimeter_extrusion.is_external_perimeter()) {
             perimeter_extrusion.depth                      = 0;
             perimeter_extrusion.nearest_external_perimeter = &perimeter_extrusion;
-            stack.push_back(&perimeter_extrusion);
+            stack.push(&perimeter_extrusion);
         }
     }
 
