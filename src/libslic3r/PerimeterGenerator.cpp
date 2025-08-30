@@ -175,20 +175,31 @@ static void apply_perimeter_ordering_classic(
     bool reverse_internal_perimeters,
     int reverse_internal_perimeters_at) {
     
-    // Classic is beautiful - explicit roles!
+    // Process each sub-collection (group/island) independently
+    for (ExtrusionEntity* entity : collection.entities) {
+        if (ExtrusionEntityCollection* sub_collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            // Recursively process nested collections
+            apply_perimeter_ordering_classic(*sub_collection, 
+                                            swap_first_int_w_ext_perimeter, 
+                                            reverse_internal_perimeters,
+                                            reverse_internal_perimeters_at);
+        }
+    }
+    
+    // Now process THIS collection's direct loops only
     std::vector<ExtrusionEntity*> external_loops;
     std::vector<ExtrusionEntity*> first_internal_loops;
     std::vector<ExtrusionEntity*> second_internal_loops;
     std::vector<ExtrusionEntity*> deeper_internal_loops;
+    std::vector<ExtrusionEntity*> sub_collections;
     std::vector<ExtrusionEntity*> other_entities;
     
-    #ifdef DEBUG
-    printf("\n=== Classic perimeter ordering ===\n");
-    #endif
-    
-    // Categorize by role
+    // Categorize only direct children
     for (ExtrusionEntity* entity : collection.entities) {
-        if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+        if (ExtrusionEntityCollection* sub = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            // Keep sub-collections separate - they've already been processed
+            sub_collections.push_back(entity);
+        } else if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
             if (!loop->paths.empty()) {
                 ExtrusionRole role = loop->paths.front().role();
                 
@@ -204,38 +215,21 @@ static void apply_perimeter_ordering_classic(
                     other_entities.push_back(entity);
                 }
             }
-        } else if (ExtrusionEntityCollection* sub_collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
-            // Recursively apply
-            apply_perimeter_ordering_classic(*sub_collection, 
-                                            swap_first_int_w_ext_perimeter, 
-                                            reverse_internal_perimeters,
-                                            reverse_internal_perimeters_at);
-            other_entities.push_back(entity);
         } else {
             other_entities.push_back(entity);
         }
     }
     
-    #ifdef DEBUG
-    printf("Found: %zu ext, %zu int1, %zu int2, %zu deeper, %zu other\n",
-           external_loops.size(), first_internal_loops.size(), 
-           second_internal_loops.size(), deeper_internal_loops.size(), 
-           other_entities.size());
-    #endif
-    
-    // Apply reverse_internal_perimeters
+    // Apply reverse_internal_perimeters (same as before)
     if (reverse_internal_perimeters && reverse_internal_perimeters_at > 0) {
         if (reverse_internal_perimeters_at == 1) {
-            // Reverse ALL internals
             std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
             std::reverse(second_internal_loops.begin(), second_internal_loops.end());
             std::reverse(first_internal_loops.begin(), first_internal_loops.end());
         } else if (reverse_internal_perimeters_at == 2) {
-            // Reverse from second onwards
             std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
             std::reverse(second_internal_loops.begin(), second_internal_loops.end());
         } else {
-            // Reverse only deeper
             std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
         }
     }
@@ -243,9 +237,14 @@ static void apply_perimeter_ordering_classic(
     // Rebuild collection
     collection.entities.clear();
     
+    // Add sub-collections first (they represent separate islands/groups)
+    collection.entities.insert(collection.entities.end(),
+                              sub_collections.begin(), 
+                              sub_collections.end());
+    
+    // Then add this level's loops in the correct order
     if (swap_first_int_w_ext_perimeter && !first_internal_loops.empty()) {
         // GROOVE INJECTION ORDER
-        // deeper → second → external → first (LAST!)
         collection.entities.insert(collection.entities.end(), 
                                   deeper_internal_loops.begin(), 
                                   deeper_internal_loops.end());
@@ -258,10 +257,6 @@ static void apply_perimeter_ordering_classic(
         collection.entities.insert(collection.entities.end(),
                                   first_internal_loops.begin(), 
                                   first_internal_loops.end());
-        
-        #ifdef DEBUG
-        printf("Applied groove injection pattern\n");
-        #endif
     } else {
         // Normal order
         collection.entities.insert(collection.entities.end(),

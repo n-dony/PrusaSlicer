@@ -375,7 +375,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
     
     // ===== PHASE 4: INTER-GROUP HANDLING =====
     // For complex geometries with multiple groups
-    if (grouped_extrusions.size() > 1 && swap_first_int_w_ext_perimeter) {
+    /*if (grouped_extrusions.size() > 1 && swap_first_int_w_ext_perimeter) {
         #ifdef DEBUG
         printf("\n=== Inter-group processing ===\n");
         #endif
@@ -427,7 +427,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
                           }),
             grouped_extrusions.end()
         );
-    }
+    }*/
     
     // ===== PHASE 5: BUILD FINAL OUTPUT =====
     const std::vector<size_t> grouped_extrusion_order = 
