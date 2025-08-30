@@ -28,6 +28,10 @@ struct PerimeterExtrusion
     PerimeterExtrusion(const ExtrusionLine& line, double a, const Polygon& poly, const BoundingBox& box)
         : extrusion(line), area(a), polygon(poly), bbox(box) {}
     
+        // Default constructor
+    PerimeterExtrusion() = default;
+
+
     // Existing methods
     bool is_contour() const { return extrusion.is_contour(); }
     bool is_closed() const { return extrusion.is_closed; }
