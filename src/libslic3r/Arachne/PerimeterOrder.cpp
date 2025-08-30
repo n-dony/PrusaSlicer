@@ -299,10 +299,19 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
         
         // Step 1: Sort by depth (deepest first for inside-out default)
         // We HAVE this information - use it!
-        std::stable_sort(group.extrusions.begin(), group.extrusions.end(),
-                        [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
-                            return a->depth > b->depth;  // Higher depth = deeper internal
-                        });
+        if (external_perimeters_first) {
+            // Sort for outside-in (external first)
+            std::stable_sort(group.extrusions.begin(), group.extrusions.end(),
+                            [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
+                                return a->depth < b->depth;  // Lower depth = external first
+                            });
+        } else {
+            // Sort for inside-out (internal first)
+            std::stable_sort(group.extrusions.begin(), group.extrusions.end(),
+                            [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
+                                return a->depth > b->depth;  // Higher depth = internal first
+                            });
+        }
         
         #ifdef DEBUG
         log_perimeter_order(group.extrusions, "After depth sort");
@@ -360,7 +369,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
         // Note: external_perimeters_first is actually a reversal flag
         // false = inside-out (default, what we have now)
         // true = outside-in (need to reverse)
-        if (external_perimeters_first) {
+        /*if (external_perimeters_first) {
             std::reverse(group.extrusions.begin(), group.extrusions.end());
             #ifdef DEBUG
             printf("Reversed for external_perimeters_first (outside-in)\n");
@@ -370,64 +379,11 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
             #ifdef DEBUG
             log_perimeter_order(group.extrusions, "Final (inside-out)");
             #endif
-        }
+        }*/
     }
     
     // ===== PHASE 4: INTER-GROUP HANDLING =====
-    // For complex geometries with multiple groups
-    /*if (grouped_extrusions.size() > 1 && swap_first_int_w_ext_perimeter) {
-        #ifdef DEBUG
-        printf("\n=== Inter-group processing ===\n");
-        #endif
-        
-        // Collect all first_internals from all groups
-        std::vector<const PerimeterExtrusion*> all_first_internals;
-        
-        for (auto& group : grouped_extrusions) {
-            auto new_end = std::remove_if(
-                group.extrusions.begin(), group.extrusions.end(),
-                [&all_first_internals](const PerimeterExtrusion* p) {
-                    if (p->depth == 1) {  // first_internal
-                        all_first_internals.push_back(p);
-                        return true;
-                    }
-                    return false;
-                });
-            group.extrusions.erase(new_end, group.extrusions.end());
-        }
-        
-        // Add all first_internals to the last non-empty group
-        if (!all_first_internals.empty()) {
-            // Find last non-empty group
-            auto last_non_empty = std::find_if(
-                grouped_extrusions.rbegin(), grouped_extrusions.rend(),
-                [](const GroupedPerimeterExtrusions& g) { 
-                    return !g.extrusions.empty(); 
-                });
-            
-            if (last_non_empty != grouped_extrusions.rend()) {
-                last_non_empty->extrusions.insert(
-                    last_non_empty->extrusions.end(),
-                    all_first_internals.begin(), 
-                    all_first_internals.end()
-                );
-                
-                #ifdef DEBUG
-                printf("Moved %zu first_internals to last group for injection\n", 
-                       all_first_internals.size());
-                #endif
-            }
-        }
-        
-        // Remove empty groups
-        grouped_extrusions.erase(
-            std::remove_if(grouped_extrusions.begin(), grouped_extrusions.end(),
-                          [](const GroupedPerimeterExtrusions& g) { 
-                              return g.extrusions.empty(); 
-                          }),
-            grouped_extrusions.end()
-        );
-    }*/
+    // removed
     
     // ===== PHASE 5: BUILD FINAL OUTPUT =====
     const std::vector<size_t> grouped_extrusion_order = 
