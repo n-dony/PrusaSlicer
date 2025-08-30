@@ -26,7 +26,9 @@ struct PerimeterExtrusion
     PerimeterExtrusion *nearest_external_perimeter;
 
     PerimeterExtrusion(const ExtrusionLine& line, double a, const Polygon& poly, const BoundingBox& box)
-        : extrusion(line), area(a), polygon(poly), bbox(box) {}
+        : extrusion(line), area(a), polygon(poly), bbox(box), 
+        depth(std::numeric_limits<size_t>::max()),  // Initialize depth
+        nearest_external_perimeter(nullptr) {}       // Initialize pointer
     
         // Default constructor
     PerimeterExtrusion() = default;
