@@ -215,7 +215,7 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
     return grouped_extrusions_order;
 }
 
-static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterExtrusions &sorted_perimeter_extrusions, const bool external_perimeters_first) {
+static PerimeterExtrusions extract_ordered_perimeter_extrusions_old(const PerimeterExtrusions &sorted_perimeter_extrusions, const bool external_perimeters_first) {
     // Extrusions are ordered inside each group.
     std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
 
@@ -274,14 +274,202 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
 
     return ordered_extrusions;
 }
+// In PerimeterOrder.cpp
+static PerimeterExtrusions extract_ordered_perimeter_extrusions(
+    const PerimeterExtrusions &sorted_perimeter_extrusions, 
+    const bool external_perimeters_first, 
+    const bool swap_first_int_w_ext_perimeter, 
+    const bool reverse_internal_perimeters, 
+    const int reverse_internal_perimeters_at) {
+    
+    // ===== PHASE 1: BUILD GROUPS (unchanged) =====
+    std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
+    std::vector<bool> visited(sorted_perimeter_extrusions.size(), false);
+    std::deque<const PerimeterExtrusion *> stack;
 
+    for (size_t seed_idx = 0; seed_idx < sorted_perimeter_extrusions.size(); seed_idx++) {
+        if (!visited[seed_idx]) {
+            const PerimeterExtrusion *seed_perimeter_extrusion = &sorted_perimeter_extrusions[seed_idx];
+            visited[seed_idx] = true;
+            stack.push_back(seed_perimeter_extrusion);
+
+            grouped_extrusions.push_back(GroupedPerimeterExtrusions(seed_perimeter_extrusion));
+
+            while (!stack.empty()) {
+                const PerimeterExtrusion *perimeter_extrusion = stack.front();
+                stack.pop_front();
+
+                grouped_extrusions.back().extrusions.push_back(perimeter_extrusion);
+
+                std::vector<const PerimeterExtrusion *> external_candidates;
+                std::vector<const PerimeterExtrusion *> other_candidates;
+
+                for (const PerimeterExtrusion *adjacent_extrusion : perimeter_extrusion->adjacent_perimeter_extrusions) {
+                    const size_t adjacent_idx = adjacent_extrusion - sorted_perimeter_extrusions.data();
+                    if (!visited[adjacent_idx]) {
+                        visited[adjacent_idx] = true;
+                        if (adjacent_extrusion->is_external_perimeter())
+                            external_candidates.push_back(adjacent_extrusion);
+                        else
+                            other_candidates.push_back(adjacent_extrusion);
+                    }
+                }
+
+                std::vector<const PerimeterExtrusion *> available_candidates;
+                append(available_candidates, external_candidates);
+                append(available_candidates, other_candidates);
+                std::vector<const PerimeterExtrusion *> adjacent_extrusions = 
+                    ordered_perimeter_extrusions_to_minimize_distances(Point::Zero(), available_candidates);
+                for (auto extrusion_it = adjacent_extrusions.rbegin(); extrusion_it != adjacent_extrusions.rend(); ++extrusion_it) {
+                    stack.push_back(*extrusion_it);
+                }
+            }
+        }
+    }
+    
+    // ===== PHASE 2: DEBUG HELPERS =====
+    #ifdef DEBUG
+    auto log_perimeter_order = [](const std::vector<const PerimeterExtrusion*>& perims, const std::string& phase) {
+        printf("%s: ", phase.c_str());
+        for (const auto* p : perims) {
+            if (p->is_external_perimeter()) printf("Ext(d%zu) ", p->depth);
+            else if (p->is_first_internal_perimeter()) printf("Int1(d%zu) ", p->depth);
+            else if (p->is_second_internal_perimeter()) printf("Int2(d%zu) ", p->depth);
+            else printf("Int%zu(d%zu) ", p->depth, p->depth);
+        }
+        printf("\n");
+    };
+    
+    printf("\n=== Perimeter Ordering Debug ===\n");
+    printf("Total groups: %zu\n", grouped_extrusions.size());
+    printf("Options: external_first=%d, swap=%d, reverse=%d(at %d)\n",
+           external_perimeters_first, swap_first_int_w_ext_perimeter, 
+           reverse_internal_perimeters, reverse_internal_perimeters_at);
+    #endif
+    
+    // ===== PHASE 3: PROCESS EACH GROUP =====
+    for (size_t group_idx = 0; group_idx < grouped_extrusions.size(); group_idx++) {
+        auto& group = grouped_extrusions[group_idx];
+        
+        #ifdef DEBUG
+        printf("\n--- Group %zu (%zu perimeters) ---\n", group_idx, group.extrusions.size());
+        log_perimeter_order(group.extrusions, "Original");
+        #endif
+        
+        // Step 1: Sort by depth (deepest first for inside-out default)
+        // We HAVE this information - use it!
+        if (external_perimeters_first) {
+            // Sort for outside-in (external first)
+            std::stable_sort(group.extrusions.begin(), group.extrusions.end(),
+                            [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
+                                return a->depth < b->depth;  // Lower depth = external first
+                            });
+        } else {
+            // Sort for inside-out (internal first)
+            std::stable_sort(group.extrusions.begin(), group.extrusions.end(),
+                            [](const PerimeterExtrusion* a, const PerimeterExtrusion* b) {
+                                return a->depth > b->depth;  // Higher depth = internal first
+                            });
+        }
+        
+        #ifdef DEBUG
+        log_perimeter_order(group.extrusions, "After depth sort");
+        #endif
+        
+        // Step 2: Apply reverse_internal_perimeters
+        // reverse_internal_perimeters_at counts from OUTSIDE:
+        // 1 = reverse ALL internals (depth >= 1)
+        // 2 = reverse from second internal (depth >= 2)
+        // 3 = reverse from third internal (depth >= 3)
+        if (reverse_internal_perimeters && reverse_internal_perimeters_at > 0) {
+            // Find where to start reversing
+            auto reverse_start = std::stable_partition(
+                group.extrusions.begin(), group.extrusions.end(),
+                [reverse_internal_perimeters_at](const PerimeterExtrusion* p) {
+                    // Keep perimeters that should NOT be reversed
+                    return p->depth < reverse_internal_perimeters_at;
+                });
+            
+            // Reverse the selected range
+            if (reverse_start != group.extrusions.end()) {
+                std::reverse(reverse_start, group.extrusions.end());
+                
+                #ifdef DEBUG
+                printf("Reversed %zu perimeters from depth %d\n", 
+                       std::distance(reverse_start, group.extrusions.end()),
+                       reverse_internal_perimeters_at);
+                log_perimeter_order(group.extrusions, "After reverse");
+                #endif
+            }
+        }
+        
+        // Step 3: Apply swap_first_int_w_ext_perimeter (GROOVE INJECTION)
+        // Move ALL first_internal (depth=1) to the END
+        if (swap_first_int_w_ext_perimeter) {
+            // Partition: everything except first_internal goes first
+            auto first_internal_start = std::stable_partition(
+                group.extrusions.begin(), group.extrusions.end(),
+                [](const PerimeterExtrusion* p) {
+                    return p->depth != 1;  // Keep if NOT first_internal
+                });
+            
+            // Now first_internal perimeters are at the end
+            
+            #ifdef DEBUG
+            if (first_internal_start != group.extrusions.end()) {
+                printf("Moved %zu first_internal(s) to end for groove injection\n",
+                       std::distance(first_internal_start, group.extrusions.end()));
+            }
+            log_perimeter_order(group.extrusions, "After swap (groove injection)");
+            #endif
+        }
+        
+        // Step 4: Apply external_perimeters_first
+        // Note: external_perimeters_first is actually a reversal flag
+        // false = inside-out (default, what we have now)
+        // true = outside-in (need to reverse)
+        /*if (external_perimeters_first) {
+            std::reverse(group.extrusions.begin(), group.extrusions.end());
+            #ifdef DEBUG
+            printf("Reversed for external_perimeters_first (outside-in)\n");
+            log_perimeter_order(group.extrusions, "Final");
+            #endif
+        } else {
+            #ifdef DEBUG
+            log_perimeter_order(group.extrusions, "Final (inside-out)");
+            #endif
+        }*/
+    }
+    
+    // ===== PHASE 4: INTER-GROUP HANDLING =====
+    // removed
+    
+    // ===== PHASE 5: BUILD FINAL OUTPUT =====
+    const std::vector<size_t> grouped_extrusion_order = 
+        order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
+    
+    PerimeterExtrusions ordered_extrusions;
+    ordered_extrusions.reserve(sorted_perimeter_extrusions.size());
+    
+    for (size_t order_idx : grouped_extrusion_order) {
+        for (const PerimeterExtrusion *perimeter_extrusion : grouped_extrusions[order_idx].extrusions) {
+            ordered_extrusions.emplace_back(*perimeter_extrusion);
+        }
+    }
+    
+    #ifdef DEBUG
+    printf("\n=== Final result: %zu perimeters total ===\n", ordered_extrusions.size());
+    #endif
+    
+    return ordered_extrusions;
+}
 // FIXME: From the point of better patch planning, it should be better to do ordering when we have generated all extrusions (for now, when G-Code is exported).
 // FIXME: It would be better to extract the adjacency graph of extrusions from the SkeletalTrapezoidation graph.
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first) {
+PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first, const bool swap_first_int_w_ext_perimeter, const bool reverse_internal_perimeters, const int reverse_internal_perimeters_at) {
     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
-    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
+    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first, swap_first_int_w_ext_perimeter, reverse_internal_perimeters, reverse_internal_perimeters_at);
 }
 
 } // namespace Slic3r::Arachne::PerimeterOrder

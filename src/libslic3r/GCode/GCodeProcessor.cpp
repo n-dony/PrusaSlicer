@@ -2044,6 +2044,8 @@ bool GCodeProcessor::process_cura_tags(const std::string_view comment)
             set_extrusion_role(GCodeExtrusionRole::Skirt);
         else if (type == "WALL-OUTER")
             set_extrusion_role(GCodeExtrusionRole::ExternalPerimeter);
+        else if (type == "WALL-FIRSTIN")
+            set_extrusion_role(GCodeExtrusionRole::FirstInternalPerimeter);
         else if (type == "WALL-INNER")
             set_extrusion_role(GCodeExtrusionRole::Perimeter);
         else if (type == "SKIN")

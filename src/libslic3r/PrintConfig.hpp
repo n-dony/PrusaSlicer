@@ -197,6 +197,12 @@ enum class TopOnePerimeterType
     Count
 };
 
+enum class TemperatureOffsetLayers {
+    All,
+    SkipTopmost
+//    SkipTopSurfaces = 2
+};
+
 enum class GCodeThumbnailsFormat {
     PNG, JPG, QOI
 };
@@ -249,6 +255,7 @@ enum class CoolingSlowdownLogicType
     template<> const t_config_enum_names& ConfigOptionEnum<NAME>::get_enum_names(); \
     template<> const t_config_enum_values& ConfigOptionEnum<NAME>::get_enum_values();
 
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TemperatureOffsetLayers)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ArcFittingType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PrinterTechnology)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(GCodeFlavor)
@@ -714,11 +721,35 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<InfillPattern>,  bottom_fill_pattern))
     ((ConfigOptionFloatOrPercent,       external_perimeter_extrusion_width))
     ((ConfigOptionFloatOrPercent,       external_perimeter_speed))
+    //((ConfigOptionFloatOrPercent,       first_internal_perimeter_extrusion_width))
+    //((ConfigOptionFloatOrPercent,       second_internal_perimeter_extrusion_width))
+    ((ConfigOptionFloatOrPercent, first_internal_perimeter_speed))
+    ((ConfigOptionFloat,          first_internal_perimeter_acceleration))
+    ((ConfigOptionFloatOrPercent, second_internal_perimeter_speed))
+    ((ConfigOptionFloat,          second_internal_perimeter_acceleration))
+    ((ConfigOptionBool,           enable_temperature_offsets))
+    ((ConfigOptionFloats,         external_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         first_internal_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         second_internal_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         perimeter_temperature_offset))
+    ((ConfigOptionFloats,         infill_temperature_offset))
+    ((ConfigOptionFloats,         solid_infill_temperature_offset))
+    ((ConfigOptionFloats,         top_solid_infill_temperature_offset))
+    ((ConfigOptionFloats,         support_material_temperature_offset))
+    ((ConfigOptionFloats,         support_material_interface_temperature_offset))
+    ((ConfigOptionFloats,         bridge_temperature_offset))
+    ((ConfigOptionFloats,         overhang_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         gap_fill_temperature_offset))
+    ((ConfigOptionFloats,         ironing_temperature_offset))
     ((ConfigOptionBool,                 enable_dynamic_overhang_speeds))
     ((ConfigOptionFloatOrPercent,       overhang_speed_0))
     ((ConfigOptionFloatOrPercent,       overhang_speed_1))
     ((ConfigOptionFloatOrPercent,       overhang_speed_2))
     ((ConfigOptionFloatOrPercent,       overhang_speed_3))
+    ((ConfigOptionBool,                 swap_first_int_w_ext_perimeter))
+    ((ConfigOptionBool,                 reverse_internal_perimeters))
+    ((ConfigOptionInt,                  reverse_internal_perimeters_at))
+    ((ConfigOptionEnum<TemperatureOffsetLayers>, temperature_offset_layers))
     ((ConfigOptionBool,                 external_perimeters_first))
     ((ConfigOptionBool,                 extra_perimeters))
     ((ConfigOptionBool,                 extra_perimeters_on_overhangs))
@@ -960,6 +991,26 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloatOrPercent,     first_layer_speed))
     ((ConfigOptionFloatOrPercent,     first_layer_infill_speed))
     ((ConfigOptionInts,               first_layer_temperature))
+    ((ConfigOptionFloatOrPercent, first_internal_perimeter_speed))
+    ((ConfigOptionFloat,          first_internal_perimeter_acceleration))
+    ((ConfigOptionFloatOrPercent, second_internal_perimeter_speed))
+    ((ConfigOptionFloat,          second_internal_perimeter_acceleration))
+    ((ConfigOptionBool,           enable_temperature_offsets))
+    ((ConfigOptionFloat,          temperature_change_threshold))
+    ((ConfigOptionBool,           temperature_wait_for_region_change))
+    ((ConfigOptionFloats,         external_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         first_internal_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         second_internal_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         perimeter_temperature_offset))
+    ((ConfigOptionFloats,         infill_temperature_offset))
+    ((ConfigOptionFloats,         solid_infill_temperature_offset))
+    ((ConfigOptionFloats,         top_solid_infill_temperature_offset))
+    ((ConfigOptionFloats,         support_material_temperature_offset))
+    ((ConfigOptionFloats,         support_material_interface_temperature_offset))
+    ((ConfigOptionFloats,         bridge_temperature_offset))
+    ((ConfigOptionFloats,         overhang_perimeter_temperature_offset))
+    ((ConfigOptionFloats,         gap_fill_temperature_offset))
+    ((ConfigOptionFloats,         ironing_temperature_offset))
     ((ConfigOptionIntsNullable,       idle_temperature))
     ((ConfigOptionInts,               full_fan_speed_layer))
     ((ConfigOptionFloat,              infill_acceleration))

@@ -71,6 +71,8 @@ Slic3r::GCodeExtrusionRole convert(EGCodeExtrusionRole role)
     case EGCodeExtrusionRole::None:                     { return Slic3r::GCodeExtrusionRole::None; }
     case EGCodeExtrusionRole::Perimeter:                { return Slic3r::GCodeExtrusionRole::Perimeter; }
     case EGCodeExtrusionRole::ExternalPerimeter:        { return Slic3r::GCodeExtrusionRole::ExternalPerimeter; }
+    case EGCodeExtrusionRole::FirstInternalPerimeter:   { return Slic3r::GCodeExtrusionRole::FirstInternalPerimeter; }
+    case EGCodeExtrusionRole::SecondInternalPerimeter:   { return Slic3r::GCodeExtrusionRole::SecondInternalPerimeter; }
     case EGCodeExtrusionRole::OverhangPerimeter:        { return Slic3r::GCodeExtrusionRole::OverhangPerimeter; }
     case EGCodeExtrusionRole::InternalInfill:           { return Slic3r::GCodeExtrusionRole::InternalInfill; }
     case EGCodeExtrusionRole::SolidInfill:              { return Slic3r::GCodeExtrusionRole::SolidInfill; }
@@ -94,6 +96,8 @@ EGCodeExtrusionRole convert(Slic3r::GCodeExtrusionRole role)
     case Slic3r::GCodeExtrusionRole::None:                     { return EGCodeExtrusionRole::None; }
     case Slic3r::GCodeExtrusionRole::Perimeter:                { return EGCodeExtrusionRole::Perimeter; }
     case Slic3r::GCodeExtrusionRole::ExternalPerimeter:        { return EGCodeExtrusionRole::ExternalPerimeter; }
+    case Slic3r::GCodeExtrusionRole::FirstInternalPerimeter:   { return EGCodeExtrusionRole::FirstInternalPerimeter; }
+    case Slic3r::GCodeExtrusionRole::SecondInternalPerimeter:   { return EGCodeExtrusionRole::SecondInternalPerimeter; }
     case Slic3r::GCodeExtrusionRole::OverhangPerimeter:        { return EGCodeExtrusionRole::OverhangPerimeter; }
     case Slic3r::GCodeExtrusionRole::InternalInfill:           { return EGCodeExtrusionRole::InternalInfill; }
     case Slic3r::GCodeExtrusionRole::SolidInfill:              { return EGCodeExtrusionRole::SolidInfill; }

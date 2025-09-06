@@ -366,7 +366,7 @@ public:
     // Return the axes aligned bounding box containing all the extrusions with the given roles.
     //
     AABox get_extrusion_bounding_box(const std::vector<EGCodeExtrusionRole>& roles = {
-        EGCodeExtrusionRole::Perimeter, EGCodeExtrusionRole::ExternalPerimeter, EGCodeExtrusionRole::OverhangPerimeter,
+        EGCodeExtrusionRole::Perimeter, EGCodeExtrusionRole::ExternalPerimeter, EGCodeExtrusionRole::FirstInternalPerimeter, EGCodeExtrusionRole::SecondInternalPerimeter, EGCodeExtrusionRole::OverhangPerimeter,
         EGCodeExtrusionRole::InternalInfill, EGCodeExtrusionRole::SolidInfill, EGCodeExtrusionRole::TopSolidInfill,
         EGCodeExtrusionRole::Ironing, EGCodeExtrusionRole::BridgeInfill, EGCodeExtrusionRole::GapFill,
         EGCodeExtrusionRole::Skirt, EGCodeExtrusionRole::SupportMaterial, EGCodeExtrusionRole::SupportMaterialInterface,

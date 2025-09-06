@@ -120,8 +120,7 @@ ExtrusionMultiPath PerimeterGenerator::thick_polyline_to_multi_path(const ThickP
         if (path.empty()) {
             // Convert from spacing to extrusion width based on the extrusion model
             // of a square extrusion ended with semi circles.
-            path = { perimeter_index.has_value() ? ExtrusionAttributes{ path.role(), new_flow, static_cast<uint16_t>(*perimeter_index) }
-                                                 : ExtrusionAttributes{ path.role(), new_flow} };
+            path = { ExtrusionAttributes{ path.role(), new_flow } };
             path.polyline.append(line.a);
             path.polyline.append(line.b);
             #ifdef SLIC3R_DEBUG
@@ -147,6 +146,7 @@ ExtrusionMultiPath PerimeterGenerator::thick_polyline_to_multi_path(const ThickP
     return multi_path;
 }
 
+
 static void variable_width_classic(const ThickPolylines &polylines, ExtrusionRole role, const Flow &flow, const std::optional<uint32_t> &perimeter_index, std::vector<ExtrusionEntity *> &out)
 {
     // This value determines granularity of adaptive width, as G-code does not allow
@@ -170,6 +170,116 @@ static void variable_width_classic(const ThickPolylines &polylines, ExtrusionRol
     }
 }
 
+static void apply_perimeter_ordering_classic(
+    ExtrusionEntityCollection &collection,
+    bool swap_first_int_w_ext_perimeter,
+    bool reverse_internal_perimeters,
+    int reverse_internal_perimeters_at) {
+    
+    // Process each sub-collection (group/island) independently
+    for (ExtrusionEntity* entity : collection.entities) {
+        if (ExtrusionEntityCollection* sub_collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            // Recursively process nested collections
+            apply_perimeter_ordering_classic(*sub_collection, 
+                                            swap_first_int_w_ext_perimeter, 
+                                            reverse_internal_perimeters,
+                                            reverse_internal_perimeters_at);
+        }
+    }
+    
+    // Now process THIS collection's direct loops only
+    std::vector<ExtrusionEntity*> external_loops;
+    std::vector<ExtrusionEntity*> first_internal_loops;
+    std::vector<ExtrusionEntity*> second_internal_loops;
+    std::vector<ExtrusionEntity*> deeper_internal_loops;
+    std::vector<ExtrusionEntity*> sub_collections;
+    std::vector<ExtrusionEntity*> other_entities;
+    
+    // Categorize only direct children
+    for (ExtrusionEntity* entity : collection.entities) {
+        if (ExtrusionEntityCollection* sub = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            // Keep sub-collections separate - they've already been processed
+            sub_collections.push_back(entity);
+        } else if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+            if (!loop->paths.empty()) {
+                ExtrusionRole role = loop->paths.front().role();
+                
+                if (role == ExtrusionRole::ExternalPerimeter) {
+                    external_loops.push_back(entity);
+                } else if (role == ExtrusionRole::FirstInternalPerimeter) {
+                    first_internal_loops.push_back(entity);
+                } else if (role == ExtrusionRole::SecondInternalPerimeter) {
+                    second_internal_loops.push_back(entity);
+                } else if (role == ExtrusionRole::Perimeter) {
+                    deeper_internal_loops.push_back(entity);
+                } else {
+                    other_entities.push_back(entity);
+                }
+            }
+        } else {
+            other_entities.push_back(entity);
+        }
+    }
+    
+    // Apply reverse_internal_perimeters (same as before)
+    if (reverse_internal_perimeters && reverse_internal_perimeters_at > 0) {
+        if (reverse_internal_perimeters_at == 1) {
+            std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
+            std::reverse(second_internal_loops.begin(), second_internal_loops.end());
+            std::reverse(first_internal_loops.begin(), first_internal_loops.end());
+        } else if (reverse_internal_perimeters_at == 2) {
+            std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
+            std::reverse(second_internal_loops.begin(), second_internal_loops.end());
+        } else {
+            std::reverse(deeper_internal_loops.begin(), deeper_internal_loops.end());
+        }
+    }
+    
+    // Rebuild collection
+    collection.entities.clear();
+    
+    // Add sub-collections first (they represent separate islands/groups)
+    collection.entities.insert(collection.entities.end(),
+                              sub_collections.begin(), 
+                              sub_collections.end());
+    
+    // Then add this level's loops in the correct order
+    if (swap_first_int_w_ext_perimeter && !first_internal_loops.empty()) {
+        // GROOVE INJECTION ORDER
+        collection.entities.insert(collection.entities.end(), 
+                                  deeper_internal_loops.begin(), 
+                                  deeper_internal_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  second_internal_loops.begin(), 
+                                  second_internal_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  external_loops.begin(), 
+                                  external_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  first_internal_loops.begin(), 
+                                  first_internal_loops.end());
+    } else {
+        // Normal order
+        collection.entities.insert(collection.entities.end(),
+                                  deeper_internal_loops.begin(), 
+                                  deeper_internal_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  second_internal_loops.begin(), 
+                                  second_internal_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  first_internal_loops.begin(), 
+                                  first_internal_loops.end());
+        collection.entities.insert(collection.entities.end(),
+                                  external_loops.begin(), 
+                                  external_loops.end());
+    }
+    
+    // Add other entities
+    collection.entities.insert(collection.entities.end(),
+                              other_entities.begin(), 
+                              other_entities.end());
+}
+
 // Hierarchy of perimeters.
 class PerimeterGeneratorLoop {
 public:
@@ -187,6 +297,8 @@ public:
         polygon(polygon), is_contour(is_contour), depth(depth) {}
     // External perimeter. It may be CCW or CW oriented (outer contour or hole contour).
     bool is_external() const { return this->depth == 0; }
+    bool is_first_internal() const { return this->depth == 1; }
+    bool is_second_internal() const { return this->depth == 2; }
     // An island, which may have holes, but it does not have another internal island.
     bool is_internal_contour() const {
         // An internal contour is a contour containing no other contours
@@ -210,10 +322,14 @@ static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator
     ExtrusionEntityCollection coll;
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
+        bool is_first_internal = loop.is_first_internal();
+        bool is_second_internal = loop.is_second_internal();
         
-        ExtrusionLoopRole   loop_role;
-        const ExtrusionRole role_normal     = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
-        const ExtrusionRole role_overhang   = role_normal | ExtrusionRoleModifier::Bridge;
+        ExtrusionLoopRole loop_role;
+        ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
+                      role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
+                      role_normal   = is_second_internal ? ExtrusionRole::SecondInternalPerimeter : role_normal;
+        ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
         const uint16_t      perimeter_index = static_cast<uint16_t>(loop.depth);
         if (loop.is_internal_contour()) {
             // Note that we set loop role to ContourInternalPerimeter
@@ -430,7 +546,11 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator::P
             continue;
 
         const bool    is_external   = extrusion.inset_idx == 0;
+        const bool    is_first_internal   = extrusion.inset_idx == 1;
+        const bool    is_second_internal   = extrusion.inset_idx == 2;
         ExtrusionRole role_normal   = is_external ? ExtrusionRole::ExternalPerimeter : ExtrusionRole::Perimeter;
+        role_normal   = is_first_internal ? ExtrusionRole::FirstInternalPerimeter : role_normal;
+        role_normal   = is_second_internal ? ExtrusionRole::SecondInternalPerimeter : role_normal;
         ExtrusionRole role_overhang = role_normal | ExtrusionRoleModifier::Bridge;
 
         // Apply fuzzy skin if it is enabled for at least some part of the ExtrusionLine.
@@ -1121,7 +1241,7 @@ void PerimeterGenerator::process_arachne(
         return true;
     }());
 
-    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first);
+    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first, params.config.swap_first_int_w_ext_perimeter, params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at );
 
     if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
         out_loops.append(extrusion_coll);
@@ -1449,6 +1569,15 @@ void PerimeterGenerator::process_classic(
         }
         // at this point, all loops should be in contours[0]
         ExtrusionEntityCollection entities = traverse_loops_classic(params, lower_slices_polygons_cache, contours.front(), thin_walls);
+        
+        if (params.config.swap_first_int_w_ext_perimeter || params.config.reverse_internal_perimeters) {
+            apply_perimeter_ordering_classic(entities, 
+                                     params.config.swap_first_int_w_ext_perimeter,
+                                     params.config.reverse_internal_perimeters,
+                                     params.config.reverse_internal_perimeters_at);
+        }
+
+        
         // if brim will be printed, reverse the order of perimeters so that
         // we continue inwards after having finished the brim
         // TODO: add test for perimeter order

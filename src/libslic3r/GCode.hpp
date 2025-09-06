@@ -170,6 +170,21 @@ public:
     using ObjectsLayerToPrint = GCode::ObjectsLayerToPrint;
 
     std::optional<Point> last_position;
+    struct EmitModifiers {
+        EmitModifiers(bool emit_fan_speed_reset, bool emit_bridge_fan_start, bool emit_bridge_fan_end)
+            : emit_fan_speed_reset(emit_fan_speed_reset), emit_bridge_fan_start(emit_bridge_fan_start), emit_bridge_fan_end(emit_bridge_fan_end) {}
+
+        EmitModifiers() : EmitModifiers(true, true, true) {};
+
+        static EmitModifiers create_with_disabled_emits() {
+            return {false, false, false};
+        }
+
+        bool emit_fan_speed_reset  = true;
+
+        bool emit_bridge_fan_start = true;
+        bool emit_bridge_fan_end   = true;
+    };
 
 private:
     using InstanceToPrint = GCode::InstanceToPrint;
@@ -288,6 +303,7 @@ private:
         const bool is_loop,
         const std::string_view description,
         const double speed,
+        const PrintRegionConfig* region_config = nullptr,
         const std::size_t wipe_offset = 0
     );
     std::string extrude_skirt(
@@ -447,6 +463,22 @@ private:
     std::optional<Vec3d>                m_previous_layer_last_position_before_wipe;
     bool                                m_moved_to_first_layer_point{false};
 
+    struct RegionTemperatureManager {
+        bool enabled = false;
+        int current_temperature = 0;
+
+        float get_temperature_offset(ExtrusionRole role, 
+                                    const PrintConfig& config,
+                                    const PrintRegionConfig* region_config,
+                                    int extruder_id,
+                                    int layer_index,
+                                    bool is_last_layer) const ;
+        void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
+        void reset() { enabled = false; current_temperature = 0; }
+    };
+    
+    RegionTemperatureManager m_temperature_manager;
+
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
     std::unique_ptr<SpiralVase>         m_spiral_vase;
@@ -476,23 +508,8 @@ private:
     // Back-pointer to Print (const).
     const Print*                        m_print;
 
-    struct EmitModifiers {
-        EmitModifiers(bool emit_fan_speed_reset, bool emit_bridge_fan_start, bool emit_bridge_fan_end)
-            : emit_fan_speed_reset(emit_fan_speed_reset), emit_bridge_fan_start(emit_bridge_fan_start), emit_bridge_fan_end(emit_bridge_fan_end) {}
 
-        EmitModifiers() : EmitModifiers(true, true, true) {};
-
-        static EmitModifiers create_with_disabled_emits() {
-            return {false, false, false};
-        }
-
-        bool emit_fan_speed_reset  = true;
-
-        bool emit_bridge_fan_start = true;
-        bool emit_bridge_fan_end   = true;
-    };
-
-    std::string                         _extrude(const ExtrusionAttributes &attribs, const Geometry::ArcWelder::Path &path, std::string_view description, double speed, const EmitModifiers &emit_modifiers = EmitModifiers());
+    std::string _extrude(const ExtrusionAttributes &attribs, const Geometry::ArcWelder::Path &path, std::string_view description, double speed, const EmitModifiers &emit_modifiers = EmitModifiers(), const PrintRegionConfig* region_config = nullptr);
 
     void                                print_machine_envelope(GCodeOutputStream &file, const Print &print);
     std::string                         _process_start_gcode(const Print &print, unsigned int current_extruder_id);

@@ -19,7 +19,9 @@ GCodeExtrusionRole extrusion_role_to_gcode_extrusion_role(ExtrusionRole role)
     if (role == ExtrusionRole::None)                return GCodeExtrusionRole::None;
     if (role.is_perimeter()) {
         return role.is_bridge() ? GCodeExtrusionRole::OverhangPerimeter :
-               role.is_external() ? GCodeExtrusionRole::ExternalPerimeter : GCodeExtrusionRole::Perimeter;
+               role.is_external() ? GCodeExtrusionRole::ExternalPerimeter : 
+               role.is_first_internal() ? GCodeExtrusionRole::FirstInternalPerimeter :
+               role.is_second_internal() ? GCodeExtrusionRole::SecondInternalPerimeter : GCodeExtrusionRole::Perimeter;
     }
     if (role == ExtrusionRole::InternalInfill)      return GCodeExtrusionRole::InternalInfill;
     if (role == ExtrusionRole::SolidInfill)         return GCodeExtrusionRole::SolidInfill;
@@ -42,6 +44,8 @@ std::string gcode_extrusion_role_to_string(GCodeExtrusionRole role)
         case GCodeExtrusionRole::None                         : return L("Unknown");
         case GCodeExtrusionRole::Perimeter                    : return L("Perimeter");
         case GCodeExtrusionRole::ExternalPerimeter            : return L("External perimeter");
+        case GCodeExtrusionRole::FirstInternalPerimeter       : return L("First internal perimeter");
+        case GCodeExtrusionRole::SecondInternalPerimeter      : return L("Second internal perimeter");
         case GCodeExtrusionRole::OverhangPerimeter            : return L("Overhang perimeter");
         case GCodeExtrusionRole::InternalInfill               : return L("Internal infill");
         case GCodeExtrusionRole::SolidInfill                  : return L("Solid infill");
@@ -65,6 +69,10 @@ GCodeExtrusionRole string_to_gcode_extrusion_role(const std::string_view role)
         return GCodeExtrusionRole::Perimeter;
     else if (role == L("External perimeter"))
         return GCodeExtrusionRole::ExternalPerimeter;
+    else if (role == L("First internal perimeter"))
+        return GCodeExtrusionRole::FirstInternalPerimeter;
+    else if (role == L("Second internal perimeter"))
+        return GCodeExtrusionRole::SecondInternalPerimeter;
     else if (role == L("Overhang perimeter"))
         return GCodeExtrusionRole::OverhangPerimeter;
     else if (role == L("Internal infill"))

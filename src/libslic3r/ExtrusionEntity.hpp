@@ -137,7 +137,7 @@ inline bool operator==(const OverhangAttributes &lhs, const OverhangAttributes &
     }
     return true;
 }
-
+/*
 struct ExtrusionAttributes : ExtrusionFlow
 {
     ExtrusionAttributes() = default;
@@ -157,6 +157,58 @@ struct ExtrusionAttributes : ExtrusionFlow
     // Set only for external and internal perimeters. The external perimeter has value 0, the first internal perimeter has 1, and so on.
     std::optional<uint16_t> perimeter_index;
 };
+*/
+struct ExtrusionAttributes : ExtrusionFlow {
+    ExtrusionAttributes() = default;
+    ExtrusionAttributes(ExtrusionRole role) : role{ role } {}
+    ExtrusionAttributes(ExtrusionRole role, const Flow &flow) : role{ role }, ExtrusionFlow{ flow } {}
+    ExtrusionAttributes(ExtrusionRole role, const ExtrusionFlow &flow) : role{ role }, ExtrusionFlow{ flow } {}
+    ExtrusionAttributes(ExtrusionRole role, const ExtrusionFlow &flow, const uint16_t perimeter_index) : role{ role }, ExtrusionFlow{ flow }, perimeter_index{ perimeter_index } {}
+    ExtrusionAttributes(ExtrusionRole role, const ExtrusionFlow &flow, const bool maybe_self_crossing)
+        : role{role}, ExtrusionFlow{flow}, maybe_self_crossing(maybe_self_crossing) {}
+    
+    // ✅ EXISTING PRUSA FIELDS
+    ExtrusionRole   role{ ExtrusionRole::None };
+    bool maybe_self_crossing{false};
+    std::optional<OverhangAttributes> overhang_attributes;
+    // Set only for external and internal perimeters. The external perimeter has value 0, the first internal perimeter has 1, and so on.
+    std::optional<uint16_t> perimeter_index;
+    
+    // ✅ LAYER STRUCTURE INTELLIGENCE
+    bool is_top_layer_region = false;
+    bool is_bottom_layer_region = false;
+    int layers_from_top = -1;
+    int layers_from_bottom = -1;
+    
+    // ✅ GEOMETRIC INTELLIGENCE  
+    float min_width_in_path = -1.0f;
+    float max_width_in_path = -1.0f;
+    bool has_width_transition = false;
+    
+    // ✅ ALGORITHM-SPECIFIC DETECTION
+    bool is_gap_fill_area = false;      // Classic algorithm detection
+    bool is_thin_wall_classic = false;  // Classic algorithm detection
+    
+    // ✅ MANUFACTURING CONTEXT INTELLIGENCE
+    bool touches_support = false;
+    bool is_isolated_region = false;
+    bool is_visible_surface = false;
+    float distance_to_hole = -1.0f;
+    float heat_accumulation_risk = 0.0f;
+    
+    // ✅ QUALITY INTELLIGENCE
+    float dimensional_criticality = 0.0f;
+    bool has_sharp_corners = false;
+    float surface_angle = 0.0f;
+    
+    // ✅ HELPER FUNCTION (no conflicting field name)
+    bool is_thin_wall_derived() const {
+        if (is_gap_fill_area || is_thin_wall_classic) return true;
+        if (min_width_in_path > 0 && min_width_in_path < 1.5f * width) return true;
+        return false;
+    }
+};
+
 
 inline bool operator==(const ExtrusionAttributes &lhs, const ExtrusionAttributes &rhs)
 {
