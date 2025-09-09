@@ -1818,7 +1818,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("external_perimeter_temperature_offset", coFloats);
+    def = this->add("external_perimeter_temperature_offset", coInt);
     def->label = L("External perimeter");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing external perimeters. "
@@ -1827,9 +1827,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("first_internal_perimeter_temperature_offset", coFloats);
+    def = this->add("first_internal_perimeter_temperature_offset", coInt);
     def->label = L("First internal perimeter");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing the first internal perimeter. "
@@ -1838,9 +1838,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("second_internal_perimeter_temperature_offset", coFloats);
+    def = this->add("second_internal_perimeter_temperature_offset", coInt);
     def->label = L("Second internal perimeter");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing the second internal perimeter. "
@@ -1849,9 +1849,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("perimeter_temperature_offset", coFloats);
+    def = this->add("perimeter_temperature_offset", coInt);
     def->label = L("Other perimeters");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing other perimeters. "
@@ -1860,9 +1860,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("infill_temperature_offset", coFloats);
+    def = this->add("infill_temperature_offset", coInt);
     def->label = L("Infill");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing infill. "
@@ -1871,9 +1871,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("solid_infill_temperature_offset", coFloats);
+    def = this->add("solid_infill_temperature_offset", coInt);
     def->label = L("Solid infill");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing solid infill. "
@@ -1882,9 +1882,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("top_solid_infill_temperature_offset", coFloats);
+    def = this->add("top_solid_infill_temperature_offset", coInt);
     def->label = L("Top solid infill");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing top solid infill. "
@@ -1893,9 +1893,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("support_material_temperature_offset", coFloats);
+    def = this->add("support_material_temperature_offset", coInt);
     def->label = L("Support material");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing support material. "
@@ -1904,9 +1904,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("support_material_interface_temperature_offset", coFloats);
+    def = this->add("support_material_interface_temperature_offset", coInt);
     def->label = L("Support interface");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing support interface. "
@@ -1915,9 +1915,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("bridge_temperature_offset", coFloats);
+    def = this->add("bridge_temperature_offset", coInt);
     def->label = L("Bridges");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing bridges. "
@@ -1926,9 +1926,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("overhang_perimeter_temperature_offset", coFloats);
+    def = this->add("overhang_perimeter_temperature_offset", coInt);
     def->label = L("Overhang perimeters");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing overhang perimeters. "
@@ -1937,9 +1937,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("gap_fill_temperature_offset", coFloats);
+    def = this->add("gap_fill_temperature_offset", coInt);
     def->label = L("Gap fill");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when printing gap fill. "
@@ -1948,9 +1948,9 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
-    def = this->add("ironing_temperature_offset", coFloats);
+    def = this->add("ironing_temperature_offset", coInt);
     def->label = L("Ironing");
     def->category = L("Temperature offsets");
     def->tooltip = L("Temperature offset to be applied when ironing. "
@@ -1959,7 +1959,7 @@ void PrintConfigDef::init_fff_params()
     def->min = -50;
     def->max = 50;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloats { 0 });
+    def->set_default_value(new ConfigOptionInt { 0 });
 
     def = this->add("first_layer_temperature", coInts);
     def->label = L("First layer");

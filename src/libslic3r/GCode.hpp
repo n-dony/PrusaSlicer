@@ -465,19 +465,16 @@ private:
 
     struct RegionTemperatureManager {
         bool enabled = false;
-        int current_temperature = 0;
-
-        float get_temperature_offset(ExtrusionRole role, 
-                                    const PrintConfig& config,
-                                    const PrintRegionConfig* region_config,
-                                    int extruder_id,
-                                    int layer_index,
-                                    bool is_last_layer) const ;
-        void init_layer(const PrintConfig& config, int layer_index, int extruder_id);
-        void reset() { enabled = false; current_temperature = 0; }
+        int current_temperature = 0;  // Base temperature for the current layer
+        int last_set_temperature = 0;
+        int get_temperature_offset(ExtrusionRole role, 
+                            const PrintConfig& config,
+                            int layer_index,
+                            bool is_last_layer) const;
+        void reset() { enabled = false; current_temperature = 0; last_set_temperature = 0; }
     };
     
-    RegionTemperatureManager m_temperature_manager;
+    mutable RegionTemperatureManager m_temperature_manager;
 
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;

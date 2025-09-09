@@ -180,92 +180,58 @@ namespace Slic3r {
 
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
 
-    // RegionTemperatureManager implementation
-    float GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
+
+
+    int GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
         ExtrusionRole role, 
-        const PrintConfig& config,
-        const PrintRegionConfig* region_config, 
-        int extruder_id,
+        const PrintConfig& config,  // Already has region settings via m_config.apply()
         int layer_index,
-        bool is_last_layer) const  // Add this
+        bool is_last_layer) const
     {
-        // Skip first layer always
-        if (layer_index == 0 || is_last_layer) return 0.0f;
-
-        // Skip topmost layer if configured
-        //if (is_last_layer) { //&& region_config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost) {
-        //    return 0;
-        //}
-
+        // ALWAYS skip first layer - non-negotiable for bed adhesion
+        if (layer_index == 0) return 0;
+        
         // Check if offsets are enabled
-        bool use_region = region_config && region_config->enable_temperature_offsets;
-        bool use_global = config.enable_temperature_offsets;
-
-        if (!use_region && !use_global) return 0;
-
-        float offset = 0;
-
-        // Helper to safely get offset value from config
-        auto safe_get = [extruder_id](const ConfigOptionFloats& opt) -> float {
-            if (opt.values.empty()) return 0;
-            return (extruder_id < opt.values.size()) ? 
-                   opt.values[extruder_id] : opt.values[0];
-        };
-
-        // For now, since region_config might not have all offset fields yet,
-        // just use global config. Once you add the fields to PrintRegionConfig,
-        // you can add the regional override logic
-
-        if (role == ExtrusionRole::ExternalPerimeter) {
-            offset = safe_get(config.external_perimeter_temperature_offset);
-        } else if (role == ExtrusionRole::FirstInternalPerimeter) {
-            offset = safe_get(config.first_internal_perimeter_temperature_offset);
-        } else if (role == ExtrusionRole::SecondInternalPerimeter) {
-            offset = safe_get(config.second_internal_perimeter_temperature_offset);
-        } else if (role == ExtrusionRole::Perimeter) {
-            offset = safe_get(config.perimeter_temperature_offset);
-        } else if (role == ExtrusionRole::OverhangPerimeter) {
-            offset = safe_get(config.overhang_perimeter_temperature_offset);
-        } else if (role == ExtrusionRole::InternalInfill) {
-            offset = safe_get(config.infill_temperature_offset);
-        } else if (role == ExtrusionRole::SolidInfill) {
-            offset = safe_get(config.solid_infill_temperature_offset);
-        } else if (role == ExtrusionRole::TopSolidInfill) {
-            offset = safe_get(config.top_solid_infill_temperature_offset);
-        } else if (role == ExtrusionRole::SupportMaterial) {
-            offset = safe_get(config.support_material_temperature_offset);
-        } else if (role == ExtrusionRole::SupportMaterialInterface) {
-            offset = safe_get(config.support_material_interface_temperature_offset);
-        } else if (role == ExtrusionRole::BridgeInfill) {
-            offset = safe_get(config.bridge_temperature_offset);
-        } else if (role == ExtrusionRole::GapFill) {
-            offset = safe_get(config.gap_fill_temperature_offset);
-        } else if (role == ExtrusionRole::Ironing) {
-            offset = safe_get(config.ironing_temperature_offset);
-        } else {
-            // For any other roles, no offset
-            offset = 0;
+        if (!config.enable_temperature_offsets) return 0;
+        
+        // Check temperature_offset_layers setting for topmost layer
+        if (config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost && is_last_layer) {
+            return 0;
         }
-
+        
+        // Get offset based on role - config already has the right values (global or region)
+        int offset = 0;
+        
+        if (role == ExtrusionRole::ExternalPerimeter) {
+            offset = config.external_perimeter_temperature_offset.value;
+        } else if (role == ExtrusionRole::FirstInternalPerimeter) {
+            offset = config.first_internal_perimeter_temperature_offset.value;
+        } else if (role == ExtrusionRole::SecondInternalPerimeter) {
+            offset = config.second_internal_perimeter_temperature_offset.value;
+        } else if (role == ExtrusionRole::Perimeter) {
+            offset = config.perimeter_temperature_offset.value;
+        } else if (role == ExtrusionRole::OverhangPerimeter) {
+            offset = config.overhang_perimeter_temperature_offset.value;
+        } else if (role == ExtrusionRole::InternalInfill) {
+            offset = config.infill_temperature_offset.value;
+        } else if (role == ExtrusionRole::SolidInfill) {
+            offset = config.solid_infill_temperature_offset.value;
+        } else if (role == ExtrusionRole::TopSolidInfill) {
+            offset = config.top_solid_infill_temperature_offset.value;
+        } else if (role == ExtrusionRole::SupportMaterial) {
+            offset = config.support_material_temperature_offset.value;
+        } else if (role == ExtrusionRole::SupportMaterialInterface) {
+            offset = config.support_material_interface_temperature_offset.value;
+        } else if (role == ExtrusionRole::BridgeInfill) {
+            offset = config.bridge_temperature_offset.value;
+        } else if (role == ExtrusionRole::GapFill) {
+            offset = config.gap_fill_temperature_offset.value;
+        } else if (role == ExtrusionRole::Ironing) {
+            offset = config.ironing_temperature_offset.value;
+        }
+        
         return offset;
     }
-
-
-void GCodeGenerator::RegionTemperatureManager::init_layer(const PrintConfig& config, int layer_index, int extruder_id)
-{
-    if (extruder_id >= 0) {
-        // Always set the correct base temperature
-        current_temperature = (layer_index == 0) ? 
-            config.first_layer_temperature.get_at(extruder_id) : 
-            config.temperature.get_at(extruder_id);
-        
-        // Only enable offset calculations if configured
-        enabled = config.enable_temperature_offsets;
-    } else {
-        enabled = false;
-        current_temperature = 0;  // Only set to 0 if invalid extruder_id
-    }
-}
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
@@ -1652,10 +1618,7 @@ void GCodeGenerator::process_layers(
                 const LayerTools& layer_tools = tool_ordering.tools_for_layer(layer.first);
                 if (m_wipe_tower && layer_tools.has_wipe_tower)
                     m_wipe_tower->next_layer();
-                // Initialize temperature manager for the layer
-                if (m_writer.extruder()) {
-                    m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
-                }
+                
                 print.throw_if_canceled();
                 return this->process_layer(print, layer.second, layer_tools, 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
@@ -1751,9 +1714,7 @@ void GCodeGenerator::process_layers(
             } else {
                 ObjectLayerToPrint &layer = layers_to_print[layer_to_print_idx];
                 // Initialize temperature manager for the layer
-                if (m_writer.extruder()) {
-                    m_temperature_manager.init_layer(m_config, m_layer_index, m_writer.extruder()->id());
-                }
+               
                 print.throw_if_canceled();
                 return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
@@ -3563,31 +3524,32 @@ std::string GCodeGenerator::_extrude(
     }
     
     
-    if ((static_cast<const PrintConfig&>(m_config).enable_temperature_offsets || 
-         (region_config && region_config->enable_temperature_offsets)) && 
-         !this->on_first_layer() && 
-         m_writer.extruder() && 
-         m_layer_index > 0) {
-
+    if (m_config.enable_temperature_offsets && 
+        m_writer.extruder() && 
+        m_layer_index > 0) {  // Skip first layer
+        
         float offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, 
             m_config,
-            region_config, 
-            m_writer.extruder()->id(),
             m_layer_index,
-            (m_layer_count > 0) && (m_layer_index >= (m_layer_count - 1))
+            0
         );
 
-        if (offset != 0) {
-            int base_temp = m_config.temperature.get_at(m_writer.extruder()->id());
-            int target_temp = base_temp + static_cast<int>(offset);
         
-            if (std::abs(target_temp - m_temperature_manager.current_temperature) >= 
-                m_config.temperature_change_threshold) {
-                gcode += m_writer.set_temperature(target_temp, 
-                                                 m_config.temperature_wait_for_region_change);
-                m_temperature_manager.current_temperature = target_temp;
-            }
+        // Get the base temperature PrusaSlicer is using for this layer
+        int base_temp = (m_layer_index == 0) 
+            ? m_config.first_layer_temperature.get_at(m_writer.extruder()->id())
+            : m_config.temperature.get_at(m_writer.extruder()->id());
+
+        int target_temp = base_temp + offset;
+
+        // Only issue temperature change if threshold is exceeded
+        if (target_temp != m_temperature_manager.last_set_temperature) 
+        {
+            
+            gcode += m_writer.set_temperature(target_temp, 
+                m_config.temperature_wait_for_region_change);
+            m_temperature_manager.last_set_temperature = target_temp;
         }
     }
     
