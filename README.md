@@ -1,7 +1,15 @@
 
 ![PrusaSlicer logo](/resources/icons/PrusaSlicer.png?raw=true)
 
-# PrusaSlicer # with slicing metadata conservation at extrusion level, advanced perimeter ordering and role-based temperature offsets for injection molding of the first internal perimeter.   
+# PrusaSlicer # with 
+  - slicing metadata conservation at extrusion level, 
+  - advanced perimeter ordering
+  - role-based temperature offsets for injection molding of the first internal perimeter
+  - double pass bridges
+  - <s> high quality and first internal multi-layer injection (not yet added)</s>
+
+These changes were developed with assistance from AI tools to accelerate coding and experimentation. The AI was used as a collaborator for prototyping and code generation, while design decisions and integration were guided by the author.
+Thanks to  <a href="https://ainvest.lu/">AInvest</a>, my employer, for letting me use some of the same tools I rely on at work to build and experiment with this project in my personal time.
 
 You may want to check the [PrusaSlicer project page](https://www.prusa3d.com/prusaslicer/).
 Prebuilt Windows, OSX and Linux binaries are available through the [git releases page](https://github.com/prusa3d/PrusaSlicer/releases) or from the [Prusa3D downloads page](https://www.prusa3d.com/drivers/). There are also [3rd party Linux builds available](https://github.com/prusa3d/PrusaSlicer/wiki/PrusaSlicer-on-Linux---binary-distributions).
