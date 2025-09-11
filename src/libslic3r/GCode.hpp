@@ -476,6 +476,35 @@ private:
     
     mutable RegionTemperatureManager m_temperature_manager;
 
+    struct TwoPassBridgeState {
+        bool active = false;
+        bool first_pass = false;
+        double flow_ratio = 1.0;
+        bool override_bridge_fan = false;
+        
+        void reset() {
+            active = false;
+            first_pass = false;
+            flow_ratio = 1.0;
+            override_bridge_fan = false;
+        }
+    } m_two_pass_bridge;
+    
+    // Two-pass bridge methods
+    bool is_bridge(const ExtrusionEntity* entity) const;
+    bool has_bridges_in_layer(const ObjectsLayerToPrint& layers) const;
+    ExtrusionRole bridge_role_to_normal(ExtrusionRole role) const;
+    void update_bridge_roles_recursive(ExtrusionEntity* entity, bool to_normal) const;
+    
+    LayerResult process_layer_two_pass_bridges(
+        const Print& print,
+        const ObjectsLayerToPrint& layers,
+        const LayerTools& layer_tools,
+        const GCode::SmoothPathCaches& smooth_path_caches,
+        const bool last_layer,
+        const std::vector<const PrintInstance*>* ordering,
+        const size_t single_object_idx);
+
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
     std::unique_ptr<SpiralVase>         m_spiral_vase;

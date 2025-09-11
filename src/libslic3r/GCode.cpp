@@ -202,7 +202,9 @@ namespace Slic3r {
         // Get offset based on role - config already has the right values (global or region)
         int offset = 0;
         
-        if (role == ExtrusionRole::ExternalPerimeter) {
+        if (role.is_bridge()) {
+            offset = config.bridge_temperature_offset.value;
+        } else if  (role == ExtrusionRole::ExternalPerimeter) {
             offset = config.external_perimeter_temperature_offset.value;
         } else if (role == ExtrusionRole::FirstInternalPerimeter) {
             offset = config.first_internal_perimeter_temperature_offset.value;
@@ -232,6 +234,96 @@ namespace Slic3r {
         
         return offset;
     }
+
+// Recursive bridge detection
+bool GCodeGenerator::is_bridge(const ExtrusionEntity* entity) const {
+    if (!entity) return false;
+    
+    ExtrusionRole role = entity->role();
+    
+    // BridgeInfill is always a true bridge
+    if (role == ExtrusionRole::BridgeInfill) {
+        return true;
+    }
+    
+    // For OverhangPerimeter, check actual overhang distance
+    if (role == ExtrusionRole::OverhangPerimeter) {
+        if (auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
+            const auto& attrs = path->attributes();
+            if (attrs.overhang_attributes.has_value()) {
+                float distance = std::max(attrs.overhang_attributes->start_distance_from_prev_layer,
+                                         attrs.overhang_attributes->end_distance_from_prev_layer);
+                
+                // Use the extrusion's own height!
+                float extrusion_height = attrs.height;
+                
+                // Bridge if gap is larger than the extrusion height
+                // (meaning it's floating/unsupported)
+                return distance >= extrusion_height;
+            }
+        }
+        return false;
+    }
+    
+    return false;
+}
+
+/*// Check if layer has any bridges
+bool GCodeGenerator::has_bridges_in_layer(const ObjectsLayerToPrint& layers) const {
+    for (const ObjectLayerToPrint& layer : layers) {
+        if (layer.object_layer) {
+            for (const LayerRegion* region : layer.object_layer->regions()) {
+                // Check perimeters
+                for (const ExtrusionEntity* entity : region->perimeters().entities) {
+                    if (is_bridge(entity)) return true;
+                }
+                // Check fills
+                for (const ExtrusionEntity* entity : region->fills().entities) {
+                    if (is_bridge(entity)) return true;
+                }
+                // Check thin fills
+                for (const ExtrusionEntity* entity : region->thin_fills().entities) {
+                    if (is_bridge(entity)) return true;
+                }
+            }
+        }
+    }
+    return false;
+}*/
+
+// Convert bridge role to normal role
+/*ExtrusionRole GCodeGenerator::bridge_role_to_normal(ExtrusionRole role) const {
+    if (role == ExtrusionRole::BridgeInfill)
+        return ExtrusionRole::SolidInfill;
+    if (role == ExtrusionRole::OverhangPerimeter)
+        return ExtrusionRole::Perimeter;
+    return role;
+}*/
+
+/*// Recursively update bridge roles
+void GCodeGenerator::update_bridge_roles_recursive(ExtrusionEntity* entity, bool to_normal) const {
+    if (auto* path = dynamic_cast<ExtrusionPath*>(entity)) {
+        if (to_normal && is_bridge(path)) {
+            path->set_role(bridge_role_to_normal(path->role()));
+        }
+    } else if (auto* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+        for (ExtrusionPath& p : loop->paths) {
+            if (to_normal && is_bridge(&p)) {
+                p.set_role(bridge_role_to_normal(p.role()));
+            }
+        }
+    } else if (auto* collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+        for (ExtrusionEntity* e : collection->entities) {
+            update_bridge_roles_recursive(e, to_normal);
+        }
+    } else if (auto* multipath = dynamic_cast<ExtrusionMultiPath*>(entity)) {
+        for (ExtrusionPath& p : multipath->paths) {
+            if (to_normal && is_bridge(&p)) {
+                p.set_role(bridge_role_to_normal(p.role()));
+            }
+        }
+    }
+}*/
 
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
@@ -2597,6 +2689,77 @@ LayerResult GCodeGenerator::process_layer(
     // Either printing all copies of all objects, or just a single copy of a single object.
     assert(single_object_instance_idx == size_t(-1) || layers.size() == 1);
 
+    // Check if two-pass bridge mode should be used for this layer
+    bool use_two_pass_bridges = false;
+    if (m_config.two_pass_bridge && !layers.empty()) {
+        const Layer* check_layer = nullptr;
+        for (const ObjectLayerToPrint &l : layers) {
+            if (l.object_layer) {
+                check_layer = l.object_layer;
+                break;
+            }
+        }
+        
+        if (check_layer) {
+            // Check which extruders have bridges and their min layer heights
+            std::set<unsigned int> extruders_with_bridges;
+            
+            // Check each region for bridges and note which extruder it uses
+            for (const LayerRegion* region : check_layer->regions()) {
+                bool region_has_bridges = false;
+                
+                // Check perimeters for bridges
+                const ExtrusionEntityCollection& perimeters = region->perimeters();
+                for (const ExtrusionEntity* entity : perimeters.entities) {
+                    if (is_bridge(entity)) {
+                        region_has_bridges = true;
+                        break;
+                    }
+                }
+                
+                // Check fills for bridges if not found yet
+                if (!region_has_bridges) {
+                    const ExtrusionEntityCollection& fills = region->fills();
+                    for (const ExtrusionEntity* entity : fills.entities) {
+                        if (is_bridge(entity)) {
+                            region_has_bridges = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // If this region has bridges, note its extruder
+                if (region_has_bridges) {
+                    // Get the extruder for this region's perimeters and infill
+                    unsigned int perimeter_extruder = region->region().config().perimeter_extruder.value - 1;
+                    unsigned int infill_extruder = region->region().config().infill_extruder.value - 1;
+                    
+                    // Handle "0" which means "use current extruder"
+                    if (region->region().config().perimeter_extruder.value > 0)
+                        extruders_with_bridges.insert(perimeter_extruder);
+                    if (region->region().config().infill_extruder.value > 0)
+                        extruders_with_bridges.insert(infill_extruder);
+                }
+            }
+            
+            // Now check if layer height is sufficient for the extruders that have bridges
+            if (!extruders_with_bridges.empty()) {
+                // Calculate what the first pass height would be with the configured ratio
+                double first_pass_height = check_layer->height * m_config.two_pass_first_flow_ratio;
+                
+                // Check if this height is viable for all extruders that will print bridges
+                use_two_pass_bridges = true;
+                for (unsigned int extruder_id : extruders_with_bridges) {
+                    double min_layer_height = m_config.min_layer_height.get_at(extruder_id);
+                    if (first_pass_height < min_layer_height) {
+                        use_two_pass_bridges = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // First object, support and raft layer, if available.
     const Layer         *object_layer  = nullptr;
     const SupportLayer  *support_layer = nullptr;
@@ -2622,6 +2785,10 @@ LayerResult GCodeGenerator::process_layer(
     bool                 first_layer   = layer.id() == 0;
     unsigned int         first_extruder_id = layer_tools.extruders.front();
 
+    // ===== STORE ORIGINAL Z AND LAYER HEIGHT FOR TWO-PASS =====
+    const coordf_t original_print_z = print_z;
+    const float layer_height = (object_layer != nullptr) ? object_layer->height : support_layer->height;
+
     const std::vector<InstanceToPrint> instances_to_print{sort_print_object_instances(layers, ordering, single_object_instance_idx)};
 
     // Initialize config with the 1st object to be printed at this layer.
@@ -2645,6 +2812,7 @@ LayerResult GCodeGenerator::process_layer(
         // If we're going to apply spiralvase to this layer, disable loop clipping.
         m_enable_loop_clipping = !enable;
     }
+
 
     const float height = first_layer ? static_cast<float>(print_z) : static_cast<float>(print_z) - m_last_layer_z;
 
@@ -2786,133 +2954,196 @@ LayerResult GCodeGenerator::process_layer(
     this->set_origin({0, 0});
     this->m_moved_to_first_layer_point = false;
 
-    // Extrude the skirt, brim, support, perimeters, infill ordered by the extruders.
-    for (const ExtruderExtrusions &extruder_extrusions : extrusions)
-    {
-        gcode += (layer_tools.has_wipe_tower && m_wipe_tower) ?
-            m_wipe_tower->tool_change(*this, extruder_extrusions.extruder_id, extruder_extrusions.extruder_id == layer_tools.extruders.back()) :
-            this->set_extruder(extruder_extrusions.extruder_id, print_z);
-
-        // let analyzer tag generator aware of a role type change
-        if (layer_tools.has_wipe_tower && m_wipe_tower)
-            m_last_processor_extrusion_role = GCodeExtrusionRole::WipeTower;
-
-        if (has_custom_gcode_to_emit && extruder_id_for_custom_gcode == int(extruder_extrusions.extruder_id)) {
-            assert(m_writer.extruder()->id() == extruder_id_for_custom_gcode);
-            assert(m_pending_pre_extrusion_gcode.empty());
-            // Now we have picked the right extruder, so we can emit the custom g-code.
-            gcode += ProcessLayer::emit_custom_gcode_per_print_z(*this, *layer_tools.custom_gcode, m_writer.extruder()->id(), first_extruder_id, print.config());
+    // ===== TWO-PASS BRIDGE LOOP =====
+    const int num_passes = use_two_pass_bridges ? 2 : 1;
+    
+    // Initialize state if using two-pass
+    if (use_two_pass_bridges) {
+        m_two_pass_bridge.active = true;
+        if (m_config.gcode_comments) {
+            gcode += "; Two-pass bridge layer (height: " + 
+                     std::to_string(layer_height) + "mm)\n";
         }
-
-        if (!extruder_extrusions.skirt.empty() || !extruder_extrusions.brim.empty()) {
-            gcode += m_label_objects.maybe_stop_instance();
-            this->m_label_objects.update(nullptr);
-        }
-
-        if (!this->m_moved_to_first_layer_point) {
-            const Point shift{first_instance->shift};
-            this->set_origin(unscale(shift));
-
-            const GCode::PrintObjectInstance next_instance{
-                &instances_to_print.front().print_object,
-                int(instances_to_print.front().instance_id)
-            };
-            if (m_current_instance != next_instance) {
-                m_avoid_crossing_perimeters.use_external_mp_once = true;
-            }
-
-            const double writer_z{m_writer.get_position().z()};
-            const double previous_z{writer_z <= std::numeric_limits<double>::epsilon() ? print_z : writer_z};
-
-            gcode += this->travel_to_first_position(first_point - to_3d(shift, 0), previous_z, ExtrusionRole::Mixed, [this]() {
-                if (m_writer.multiple_extruders) {
-                    return std::string{""};
+    }
+    
+    // Main extrusion loop - now wrapped in pass loop
+    for (int pass = 0; pass < num_passes; ++pass) {
+        // Configure Z height and state for each pass
+        if (use_two_pass_bridges) {
+            if (pass == 0) {
+                // First pass - bridges only at partial height
+                m_two_pass_bridge.first_pass = true;
+                m_two_pass_bridge.flow_ratio = m_config.two_pass_first_flow_ratio;
+                m_two_pass_bridge.override_bridge_fan = false;
+                
+                coordf_t first_pass_z = original_print_z - (layer_height * m_config.two_pass_first_flow_ratio);
+                
+                //gcode += m_writer.travel_to_z(first_pass_z, "Two-pass bridge: first pass");
+                
+                if (m_config.gcode_comments) {
+                    gcode += "; First pass - bridges only at " + 
+                             std::to_string(first_pass_z) + "mm\n";
                 }
-                return m_label_objects.maybe_change_instance(m_writer);
-            });
-            this->set_origin({0, 0});
-        }
-
-        if (!extruder_extrusions.skirt.empty()) {
-            this->m_label_objects.update(nullptr);
-
-            m_avoid_crossing_perimeters.use_external_mp();
-            Flow layer_skirt_flow = print.skirt_flow().with_height(float(m_skirt_done.back() - (m_skirt_done.size() == 1 ? 0. : m_skirt_done[m_skirt_done.size() - 2])));
-            double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
-            for (const auto&[_, smooth_path] : extruder_extrusions.skirt) {
-                // Adjust flow according to this layer's layer height.
-                //FIXME using the support_material_speed of the 1st object printed.
-                gcode += this->extrude_skirt(smooth_path,
-                    // Override of skirt extrusion parameters. extrude_skirt() will fill in the extrusion width.
-                    ExtrusionFlow{ mm3_per_mm, 0., layer_skirt_flow.height() }
-                );
+            } else {
+                // Second pass - everything at full height
+                m_two_pass_bridge.first_pass = false;
+                m_two_pass_bridge.flow_ratio = m_config.two_pass_second_flow_ratio;
+                m_two_pass_bridge.override_bridge_fan = m_config.two_pass_second_pass_fan_override;
+                
+                //gcode += m_writer.travel_to_z(original_print_z, "Two-pass bridge: second pass");
+                
+                if (m_config.gcode_comments) {
+                    gcode += "; Second pass - complete layer at " + 
+                             std::to_string(original_print_z) + "mm\n";
+                }
             }
-            m_avoid_crossing_perimeters.use_external_mp(false);
-            // Allow a straight travel move to the first object point if this is the first layer (but don't in next layers).
-            if (first_layer && extruder_extrusions.skirt.front().first == 0)
-                m_avoid_crossing_perimeters.disable_once();
         }
 
-        if (!extruder_extrusions.brim.empty()) {
-            m_avoid_crossing_perimeters.use_external_mp();
+        // Extrude the skirt, brim, support, perimeters, infill ordered by the extruders.
+        for (const ExtruderExtrusions &extruder_extrusions : extrusions)
+        {
+            // Skip non-bridge entities in first pass
+            /*if (use_two_pass_bridges && pass == 0) {
+                // In first pass, we'll skip entities that are not bridges
+                // This is handled naturally in _extrude() and extrude_entity()
+                // by checking m_two_pass_bridge.first_pass
+            }*/
 
-            for (const GCode::ExtrusionOrder::BrimPath &brim_path : extruder_extrusions.brim) {
-                gcode += this->extrude_smooth_path(brim_path.path, brim_path.is_loop, "brim", m_config.support_material_speed.value, nullptr);
+            gcode += (layer_tools.has_wipe_tower && m_wipe_tower) ?
+                m_wipe_tower->tool_change(*this, extruder_extrusions.extruder_id, extruder_extrusions.extruder_id == layer_tools.extruders.back()) :
+                this->set_extruder(extruder_extrusions.extruder_id, print_z);
+
+            // let analyzer tag generator aware of a role type change
+            if (layer_tools.has_wipe_tower && m_wipe_tower)
+                m_last_processor_extrusion_role = GCodeExtrusionRole::WipeTower;
+
+            if (has_custom_gcode_to_emit && extruder_id_for_custom_gcode == int(extruder_extrusions.extruder_id)) {
+                assert(m_writer.extruder()->id() == extruder_id_for_custom_gcode);
+                assert(m_pending_pre_extrusion_gcode.empty());
+                // Now we have picked the right extruder, so we can emit the custom g-code.
+                gcode += ProcessLayer::emit_custom_gcode_per_print_z(*this, *layer_tools.custom_gcode, m_writer.extruder()->id(), first_extruder_id, print.config());
             }
-            m_avoid_crossing_perimeters.use_external_mp(false);
-            // Allow a straight travel move to the first object point.
-            m_avoid_crossing_perimeters.disable_once();
-        }
 
-        m_label_objects.update(first_instance);
+            // Skip skirt and brim in first pass of two-pass bridges
+            if (!(use_two_pass_bridges && pass == 0)) {
+                if (!extruder_extrusions.skirt.empty() || !extruder_extrusions.brim.empty()) {
+                    gcode += m_label_objects.maybe_stop_instance();
+                    this->m_label_objects.update(nullptr);
+                }
 
-        if (!extruder_extrusions.overriden_extrusions.empty()) {
-            // Extrude wipes.
-            size_t gcode_size_old = gcode.size();
+                if (!this->m_moved_to_first_layer_point) {
+                    const Point shift{first_instance->shift};
+                    this->set_origin(unscale(shift));
+
+                    const GCode::PrintObjectInstance next_instance{
+                        &instances_to_print.front().print_object,
+                        int(instances_to_print.front().instance_id)
+                    };
+                    if (m_current_instance != next_instance) {
+                        m_avoid_crossing_perimeters.use_external_mp_once = true;
+                    }
+
+                    const double writer_z{m_writer.get_position().z()};
+                    const double previous_z{writer_z <= std::numeric_limits<double>::epsilon() ? print_z : writer_z};
+
+                    gcode += this->travel_to_first_position(first_point - to_3d(shift, 0), previous_z, ExtrusionRole::Mixed, [this]() {
+                        if (m_writer.multiple_extruders) {
+                            return std::string{""};
+                        }
+                        return m_label_objects.maybe_change_instance(m_writer);
+                    });
+                    this->set_origin({0, 0});
+                }
+
+                if (!extruder_extrusions.skirt.empty()) {
+                    this->m_label_objects.update(nullptr);
+
+                    m_avoid_crossing_perimeters.use_external_mp();
+                    Flow layer_skirt_flow = print.skirt_flow().with_height(float(m_skirt_done.back() - (m_skirt_done.size() == 1 ? 0. : m_skirt_done[m_skirt_done.size() - 2])));
+                    double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
+                    for (const auto&[_, smooth_path] : extruder_extrusions.skirt) {
+                        // Adjust flow according to this layer's layer height.
+                        //FIXME using the support_material_speed of the 1st object printed.
+                        gcode += this->extrude_skirt(smooth_path,
+                            // Override of skirt extrusion parameters. extrude_skirt() will fill in the extrusion width.
+                            ExtrusionFlow{ mm3_per_mm, 0., layer_skirt_flow.height() }
+                        );
+                    }
+                    m_avoid_crossing_perimeters.use_external_mp(false);
+                    // Allow a straight travel move to the first object point if this is the first layer (but don't in next layers).
+                    if (first_layer && extruder_extrusions.skirt.front().first == 0)
+                        m_avoid_crossing_perimeters.disable_once();
+                }
+
+                if (!extruder_extrusions.brim.empty()) {
+                    m_avoid_crossing_perimeters.use_external_mp();
+
+                    for (const GCode::ExtrusionOrder::BrimPath &brim_path : extruder_extrusions.brim) {
+                        gcode += this->extrude_smooth_path(brim_path.path, brim_path.is_loop, "brim", m_config.support_material_speed.value, nullptr);
+                    }
+                    m_avoid_crossing_perimeters.use_external_mp(false);
+                    // Allow a straight travel move to the first object point.
+                    m_avoid_crossing_perimeters.disable_once();
+                }
+            }
+
+            m_label_objects.update(first_instance);
+
+            // Skip overridden extrusions in first pass
+            if (!(use_two_pass_bridges && pass == 0)) {
+                if (!extruder_extrusions.overriden_extrusions.empty()) {
+                    // Extrude wipes.
+                    size_t gcode_size_old = gcode.size();
+                    for (std::size_t i{0}; i < instances_to_print.size(); ++i) {
+                        const InstanceToPrint &instance{instances_to_print[i]};
+                        using GCode::ExtrusionOrder::OverridenExtrusions;
+                        const OverridenExtrusions &overriden_extrusions{extruder_extrusions.overriden_extrusions[i]};
+                        if (is_empty(overriden_extrusions.slices_extrusions)) {
+                            continue;
+                        }
+                        this->initialize_instance(instance, layers[instance.object_layer_to_print_id], i == 0);
+                        gcode += this->extrude_slices(
+                            instance, layers[instance.object_layer_to_print_id],
+                            overriden_extrusions.slices_extrusions
+                        );
+                    }
+                    if (gcode_size_old < gcode.size()) {
+                        gcode+="; PURGING FINISHED\n";
+                    }
+                }
+            }
+
+            // Extrude normal extrusions - these will be filtered in _extrude()
             for (std::size_t i{0}; i < instances_to_print.size(); ++i) {
                 const InstanceToPrint &instance{instances_to_print[i]};
-                using GCode::ExtrusionOrder::OverridenExtrusions;
-                const OverridenExtrusions &overriden_extrusions{extruder_extrusions.overriden_extrusions[i]};
-                if (is_empty(overriden_extrusions.slices_extrusions)) {
+                using GCode::ExtrusionOrder::SupportPath;
+                const std::vector<SupportPath> &support_extrusions{extruder_extrusions.normal_extrusions[i].support_extrusions};
+                const ObjectLayerToPrint &layer_to_print{layers[instance.object_layer_to_print_id]};
+                const std::vector<SliceExtrusions> &slices_extrusions{extruder_extrusions.normal_extrusions[i].slices_extrusions};
+
+                if (support_extrusions.empty() && is_empty(slices_extrusions)) {
                     continue;
                 }
                 this->initialize_instance(instance, layers[instance.object_layer_to_print_id], i == 0);
+
+                if (!support_extrusions.empty()) {
+                    m_layer = layer_to_print.support_layer;
+                    m_object_layer_over_raft = false;
+                    gcode += this->extrude_support(support_extrusions);
+                }
+
                 gcode += this->extrude_slices(
-                    instance, layers[instance.object_layer_to_print_id],
-                    overriden_extrusions.slices_extrusions
+                    instance, layer_to_print, slices_extrusions
                 );
             }
-            if (gcode_size_old < gcode.size()) {
-                gcode+="; PURGING FINISHED\n";
-            }
+            this->set_origin(0.0, 0.0);
         }
+    } // End of pass loop
 
-        // Extrude normal extrusions.
-        for (std::size_t i{0}; i < instances_to_print.size(); ++i) {
-            const InstanceToPrint &instance{instances_to_print[i]};
-            using GCode::ExtrusionOrder::SupportPath;
-            const std::vector<SupportPath> &support_extrusions{extruder_extrusions.normal_extrusions[i].support_extrusions};
-            const ObjectLayerToPrint &layer_to_print{layers[instance.object_layer_to_print_id]};
-            const std::vector<SliceExtrusions> &slices_extrusions{extruder_extrusions.normal_extrusions[i].slices_extrusions};
-
-            if (support_extrusions.empty() && is_empty(slices_extrusions)) {
-                continue;
-            }
-            this->initialize_instance(instance, layers[instance.object_layer_to_print_id], i == 0);
-
-            if (!support_extrusions.empty()) {
-                m_layer = layer_to_print.support_layer;
-                m_object_layer_over_raft = false;
-                gcode += this->extrude_support(support_extrusions);
-            }
-
-            gcode += this->extrude_slices(
-                instance, layer_to_print, slices_extrusions
-            );
-        }
-        this->set_origin(0.0, 0.0);
+    // Reset two-pass state
+    if (use_two_pass_bridges) {
+        m_two_pass_bridge.reset();
     }
-
 
     BOOST_LOG_TRIVIAL(trace) << "Exported layer " << layer.id() << " print_z " << print_z <<
     log_memory_info();
@@ -2921,6 +3152,90 @@ LayerResult GCodeGenerator::process_layer(
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
     return result;
 }
+
+
+bool GCodeGenerator::has_bridges_in_layer(const ObjectsLayerToPrint& layers) const {
+    for (const ObjectLayerToPrint& layer : layers) {
+        if (layer.object_layer) {
+            for (const LayerRegion* region : layer.object_layer->regions()) {
+                // Check perimeters
+                const ExtrusionEntityCollection& perimeters = region->perimeters();
+                for (const ExtrusionEntity* entity : perimeters.entities) {
+                    if (is_bridge(entity)) return true;
+                }
+                // Check fills
+                const ExtrusionEntityCollection& fills = region->fills();
+                for (const ExtrusionEntity* entity : fills.entities) {
+                    if (is_bridge(entity)) return true;
+                }
+            }
+        }
+        // Check support material
+        if (layer.support_layer) {
+            const ExtrusionEntityCollection& support_fills = layer.support_layer->support_fills;
+            for (const ExtrusionEntity* entity : support_fills.entities) {
+                if (is_bridge(entity)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+
+ExtrusionRole GCodeGenerator::bridge_role_to_normal(ExtrusionRole role) const {
+    if (role.is_bridge()) {
+        // Reconstruct the role without the Bridge modifier
+        if (role == ExtrusionRole::OverhangPerimeter) {
+            // OverhangPerimeter is Perimeter | Bridge, so return just Perimeter
+            return ExtrusionRole::Perimeter;
+        } else if (role == ExtrusionRole::BridgeInfill) {
+            // BridgeInfill -> InternalInfill
+            return ExtrusionRole::InternalInfill;
+        } else if (role.is_external() && role.is_bridge()) {
+            // External perimeter with bridge -> just external perimeter
+            return ExtrusionRole::ExternalPerimeter;
+        } else if (role.is_first_internal() && role.is_bridge()) {
+            // First internal with bridge -> just first internal
+            return ExtrusionRole::FirstInternalPerimeter;
+        } else if (role.is_second_internal() && role.is_bridge()) {
+            // Second internal with bridge -> just second internal
+            return ExtrusionRole::SecondInternalPerimeter;
+        }
+        // Default: if it's a bridge perimeter, return normal perimeter
+        return ExtrusionRole::Perimeter;
+    }
+    return role;
+}
+
+void GCodeGenerator::update_bridge_roles_recursive(ExtrusionEntity* entity, bool to_normal) const {
+    if (!entity) return;
+    
+    if (auto* path = dynamic_cast<ExtrusionPath*>(entity)) {
+        if (to_normal && is_bridge(path)) {
+            ExtrusionAttributes& attr = const_cast<ExtrusionAttributes&>(path->attributes());
+            attr.role = bridge_role_to_normal(path->role());
+        }
+    } else if (auto* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+        for (ExtrusionPath& p : loop->paths) {
+            if (to_normal && is_bridge(&p)) {
+                ExtrusionAttributes& attr = const_cast<ExtrusionAttributes&>(p.attributes());
+                attr.role = bridge_role_to_normal(p.role());
+            }
+        }
+    } else if (auto* collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+        for (ExtrusionEntity* e : collection->entities) {
+            update_bridge_roles_recursive(e, to_normal);
+        }
+    } else if (auto* multipath = dynamic_cast<ExtrusionMultiPath*>(entity)) {
+        for (ExtrusionPath& p : multipath->paths) {
+            if (to_normal && is_bridge(&p)) {
+                ExtrusionAttributes& attr = const_cast<ExtrusionAttributes&>(p.attributes());
+                attr.role = bridge_role_to_normal(p.role());
+            }
+        }
+    }
+}
+
 
 static const auto comment_perimeter = "perimeter"sv;
 
@@ -3405,16 +3720,40 @@ double cap_speed(
 }
 
 std::string GCodeGenerator::_extrude(
-    const ExtrusionAttributes       &path_attr,
+    const ExtrusionAttributes       &path_attr_original,
     const Geometry::ArcWelder::Path &path,
     const std::string_view           description,
     double                           speed,
     const EmitModifiers             &emit_modifiers,
-    const PrintRegionConfig* region_config 
+    const PrintRegionConfig* region_config
 )
 {
+    // Skip non-bridge entities in first pass
+    if (m_two_pass_bridge.active && m_two_pass_bridge.first_pass) {
+        if (!path_attr_original.role.is_bridge()) {
+            return "";
+        }
+    }
+    
     std::string gcode;
-    const std::string_view description_bridge = path_attr.role.is_bridge() ? " (bridge)"sv : ""sv;
+    
+    const std::string_view description_bridge = path_attr_original.role.is_bridge() ? " (bridge)"sv : ""sv;
+    
+    // Create modifiable copy
+    ExtrusionAttributes path_attr = path_attr_original;
+    double z = this->m_last_layer_z;
+    double height = this->m_last_height     ;
+    // Apply two-pass bridge flow modification
+    if (m_two_pass_bridge.active && path_attr.role.is_bridge()) {
+        path_attr.mm3_per_mm *= m_two_pass_bridge.flow_ratio;
+        if (m_two_pass_bridge.first_pass) { 
+            // Correct: Adjust Z based on actual flow ratio
+            z -= height * (1.0 - m_two_pass_bridge.flow_ratio);
+        } else {
+            path_attr.role = bridge_role_to_normal(path_attr.role);
+        }
+    }
+
 
     const bool has_active_instance{m_label_objects.has_active_instance()};
     if (m_writer.multiple_extruders && has_active_instance) {
@@ -3422,23 +3761,32 @@ std::string GCodeGenerator::_extrude(
     }
 
     if (!this->last_position) {
-        const double z = this->m_last_layer_z;
+        //const double z = this->m_last_layer_z;
         const std::string comment{"move to print after unknown position"};
         gcode += this->retract_and_wipe();
         gcode += m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
         gcode += this->m_writer.travel_to_xy(this->point_to_gcode(path.front().point), comment);
         gcode += this->m_writer.travel_to_z_force(z, comment);
-    } else if ( this->last_position != path.front().point) {
-        std::string comment = "move to first ";
-        comment += description;
-        comment += description_bridge;
-        comment += " point";
-        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z))};
-        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + (path.front().height_fraction - 1.0) * path_attr.height))};
-        const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
-            return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
-        })};
-        gcode += travel_gcode;
+    } else {
+        // Check if a travel move is needed based on both XY and Z coordinates.
+        bool xy_match = (*this->last_position == path.front().point);
+        double target_z = z + (path.front().height_fraction - 1.0) * path_attr.height;
+        bool z_match = std::abs(m_writer.get_position().z() - target_z) < EPSILON;
+
+        // If either XY or Z do not match, generate a travel move.
+        if (!xy_match || !z_match) {
+            std::string comment = "move to first ";
+            comment += description;
+            comment += description_bridge;
+            comment += " point";
+            // Use the writer's current Z as the starting Z for the travel move.
+            const Vec3crd from{to_3d(*this->last_position, scaled(m_writer.get_position().z()))};
+            const Vec3crd to{to_3d(path.front().point, scaled(target_z))};
+            const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
+                return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
+            })};
+            gcode += travel_gcode;
+        }
     }
 
     // compensate retraction
@@ -3480,10 +3828,11 @@ std::string GCodeGenerator::_extrude(
     }
 
     // calculate extrusion length per distance unit
-    double e_per_mm = m_writer.extruder()->e_per_mm3() * path_attr.mm3_per_mm;
+    double e_per_mm{m_writer.extruder()->e_per_mm3() * path_attr.mm3_per_mm};
     if (m_writer.extrusion_axis().empty())
         // gcfNoExtrusion
         e_per_mm = 0;
+    
 
     // set speed
     if (speed == -1) {
@@ -3632,14 +3981,20 @@ std::string GCodeGenerator::_extrude(
     std::string cooling_marker_setspeed_comments;
     if (m_enable_cooling_markers) {
         if (path_attr.role.is_bridge() && emit_modifiers.emit_bridge_fan_start) {
-            gcode += ";_BRIDGE_FAN_START\n";
+            if (m_two_pass_bridge.active && !m_two_pass_bridge.first_pass && 
+                m_two_pass_bridge.override_bridge_fan) {
+                // Use normal fan speed in second pass if configured
+                cooling_marker_setspeed_comments = ";_EXTRUDE_SET_SPEED";
+            } else {
+                gcode += ";_BRIDGE_FAN_START\n";
+            }
         } else if (!path_attr.role.is_bridge()) {
             cooling_marker_setspeed_comments = ";_EXTRUDE_SET_SPEED";
         }
 
         if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             cooling_marker_setspeed_comments += ";_EXTERNAL_PERIMETER";
-            }
+        }
         if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
             cooling_marker_setspeed_comments += ";_FIRST_INTERNAL_PERIMETER";
         }

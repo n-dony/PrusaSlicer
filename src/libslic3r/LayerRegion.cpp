@@ -85,7 +85,6 @@ void LayerRegion::slices_to_fill_surfaces_clipped()
     }
 }
 
-// Produce perimeter extrusions, gap fill extrusions and fill polygons for input slices.
 void LayerRegion::make_perimeters(
     // Input slices for which the perimeters, gap fills and fill expolygons are to be generated.
     const SurfaceCollection                                &slices,
@@ -169,6 +168,155 @@ void LayerRegion::make_perimeters(
             ExtrusionRange{ perimeters_begin, uint32_t(m_perimeters.size()) }, 
             ExtrusionRange{ gap_fills_begin,  uint32_t(m_thin_fills.size()) });
         fill_expolygons_ranges.emplace_back(ExtrusionRange{ fill_expolygons_begin, uint32_t(fill_expolygons.size()) });
+    }
+    
+    // --- BRIDGE ANCHOR LOGIC ---
+
+    // Helper function to re-segment an ExtrusionLoop, consuming multiple adjacent paths
+    // if necessary to meet the required anchor_length.
+    auto splice_bridge_anchors_iterative = [](ExtrusionLoop& loop, const double anchor_length) {
+        if (anchor_length <= 0 || loop.paths.size() <= 1) {
+            return;
+        }
+
+        const ExtrusionPaths& original_paths = loop.paths;
+        const size_t path_count = original_paths.size();
+        std::vector<Polyline> result_polylines(path_count);
+        std::vector<bool> consumed(path_count, false);
+
+        for (size_t i = 0; i < path_count; ++i) {
+            const ExtrusionPath& current_path_orig = original_paths[i];
+            if (!current_path_orig.role().is_bridge()) {
+                continue; // Process only bridges in this pass
+            }
+            
+            Polyline bridge_polyline = current_path_orig.polyline;
+
+            // --- Receive from PREVIOUS paths ---
+            double length_needed_prev = anchor_length;
+            Polyline anchor_from_prev;
+            size_t neighbor_idx_prev = (i == 0) ? path_count - 1 : i - 1;
+
+            while (length_needed_prev > EPSILON) {
+                if (consumed[neighbor_idx_prev] || original_paths[neighbor_idx_prev].role().is_bridge() || neighbor_idx_prev == i) break;
+                
+                const ExtrusionPath& neighbor = original_paths[neighbor_idx_prev];
+                double neighbor_len = neighbor.polyline.length();
+                Polyline segment_to_take = neighbor.polyline;
+
+                if (neighbor_len >= length_needed_prev) {
+                    segment_to_take.clip_start(neighbor_len - length_needed_prev);
+                    length_needed_prev = 0;
+                } else {
+                    consumed[neighbor_idx_prev] = true;
+                    length_needed_prev -= neighbor_len;
+                }
+                anchor_from_prev.points.insert(anchor_from_prev.points.begin(), segment_to_take.points.begin(), segment_to_take.points.end());
+                if (length_needed_prev > EPSILON) neighbor_idx_prev = (neighbor_idx_prev == 0) ? path_count - 1 : neighbor_idx_prev - 1;
+            }
+            if (!anchor_from_prev.empty()) {
+                 bridge_polyline.points.insert(bridge_polyline.points.begin(), anchor_from_prev.points.begin(), anchor_from_prev.points.end() - 1);
+            }
+
+            // --- Receive from NEXT paths ---
+            double length_needed_next = anchor_length;
+            Polyline anchor_from_next;
+            size_t neighbor_idx_next = (i == path_count - 1) ? 0 : i + 1;
+
+            while (length_needed_next > EPSILON) {
+                 if (consumed[neighbor_idx_next] || original_paths[neighbor_idx_next].role().is_bridge() || neighbor_idx_next == i) break;
+
+                const ExtrusionPath& neighbor = original_paths[neighbor_idx_next];
+                double neighbor_len = neighbor.polyline.length();
+                Polyline segment_to_take = neighbor.polyline;
+
+                if (neighbor_len >= length_needed_next) {
+                    segment_to_take.clip_end(neighbor_len - length_needed_next);
+                    length_needed_next = 0;
+                } else {
+                    consumed[neighbor_idx_next] = true;
+                    length_needed_next -= neighbor_len;
+                }
+                anchor_from_next.points.insert(anchor_from_next.points.end(), segment_to_take.points.begin(), segment_to_take.points.end());
+                if (length_needed_next > EPSILON) neighbor_idx_next = (neighbor_idx_next == path_count - 1) ? 0 : neighbor_idx_next + 1;
+            }
+            if (!anchor_from_next.empty()) {
+                bridge_polyline.points.insert(bridge_polyline.points.end(), anchor_from_next.points.begin() + 1, anchor_from_next.points.end());
+            }
+            
+            result_polylines[i] = std::move(bridge_polyline);
+        }
+
+        // Now, calculate the remaining geometry for non-bridge, non-consumed paths
+        for(size_t i = 0; i < path_count; ++i) {
+            if(consumed[i] || original_paths[i].role().is_bridge()) continue;
+
+            Polyline result_polyline = original_paths[i].polyline;
+
+            // Check if TAIL needs to be donated
+            size_t next_idx = (i == path_count - 1) ? 0 : i + 1;
+            if(original_paths[next_idx].role().is_bridge()) {
+                double length_to_donate = anchor_length;
+                size_t current_idx = i;
+                while(length_to_donate > EPSILON) {
+                    if (original_paths[current_idx].role().is_bridge()) break;
+                    double len = original_paths[current_idx].polyline.length();
+                    if (len >= length_to_donate) {
+                        if (current_idx == i) result_polyline.clip_end(length_to_donate);
+                        break;
+                    }
+                    if (current_idx == i) result_polyline.points.clear();
+                    length_to_donate -= len;
+                    current_idx = (current_idx == 0) ? path_count - 1 : current_idx - 1;
+                }
+            }
+
+            // Check if HEAD needs to be donated
+            size_t prev_idx = (i == 0) ? path_count - 1 : i - 1;
+            if (original_paths[prev_idx].role().is_bridge()) {
+                double length_to_donate = anchor_length;
+                 size_t current_idx = i;
+                 while(length_to_donate > EPSILON) {
+                    if (original_paths[current_idx].role().is_bridge()) break;
+                    double len = original_paths[current_idx].polyline.length();
+                    if (len >= length_to_donate) {
+                        if (current_idx == i) result_polyline.clip_start(length_to_donate);
+                        break;
+                    }
+                    if (current_idx == i) result_polyline.points.clear();
+                    length_to_donate -= len;
+                    current_idx = (current_idx == path_count - 1) ? 0 : current_idx + 1;
+                 }
+            }
+            result_polylines[i] = std::move(result_polyline);
+        }
+
+        ExtrusionPaths new_paths;
+        new_paths.reserve(path_count);
+        for(size_t i = 0; i < path_count; ++i) {
+            if (result_polylines[i].is_valid()) {
+                new_paths.emplace_back(std::move(result_polylines[i]), original_paths[i].attributes());
+            }
+        }
+        loop.paths = std::move(new_paths);
+    };
+
+    // Lambda to recursively find and process all ExtrusionLoops.
+    std::function<void(ExtrusionEntityCollection&)> apply_to_loops;
+    apply_to_loops = [&](ExtrusionEntityCollection& collection) {
+        const double anchor_length = scale_(print_config.bridge_anchor_length.value);
+        for (ExtrusionEntity* entity : collection.entities) {
+            if (auto* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+                splice_bridge_anchors_iterative(*loop, anchor_length);
+            } else if (auto* coll = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+                apply_to_loops(*coll); // Recurse into sub-collections
+            }
+        }
+    };
+
+    // Apply bridge anchor splicing to all generated perimeters.
+    if (print_config.bridge_anchor_length > 0) {
+        apply_to_loops(m_perimeters);
     }
 }
 

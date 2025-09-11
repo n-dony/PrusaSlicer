@@ -1013,6 +1013,12 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionInt,         overhang_perimeter_temperature_offset))
     ((ConfigOptionInt,         gap_fill_temperature_offset))
     ((ConfigOptionInt,         ironing_temperature_offset))
+    // Add to PrintConfig class members:
+    ((ConfigOptionBool,                          two_pass_bridge))
+    ((ConfigOptionFloat,                          two_pass_first_flow_ratio))
+    ((ConfigOptionFloat,                          two_pass_second_flow_ratio))
+    ((ConfigOptionBool,                           two_pass_second_pass_fan_override))
+    ((ConfigOptionFloat,                          bridge_anchor_length))
     ((ConfigOptionIntsNullable,       idle_temperature))
     ((ConfigOptionInts,               full_fan_speed_layer))
     ((ConfigOptionFloat,              infill_acceleration))

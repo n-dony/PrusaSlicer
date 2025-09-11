@@ -722,6 +722,60 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1));
 
+    def = this->add("two_pass_bridge", coBool);
+    def->label = L("Two-pass bridges");
+    def->category = L("Advanced");
+    def->tooltip = L("Print bridges in two passes for better quality.\n"
+                    "First pass at partial layer height with bridge settings,\n"
+                    "second pass completes the layer with normal settings.\n\n"
+                    "✓ Works automatically with adaptive layer heights\n"
+                    "✓ Only applies to layers thick enough for two passes\n"
+                    "✓ Thinner layers automatically use normal bridges");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+    
+    def = this->add("two_pass_first_flow_ratio", coFloat);
+    def->label = L("First pass flow ratio");
+    def->category = L("Advanced");
+    def->tooltip = L("Material flow for the first pass of two-pass bridges.\n"
+                    "0.5 means 50% of material at half layer height.");
+    def->sidetext = L("ratio");
+    def->min = 0.4;
+    def->max = 0.6;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+    
+    def = this->add("two_pass_second_flow_ratio", coFloat);
+    def->label = L("Second pass flow ratio");
+    def->category = L("Advanced");
+    def->tooltip = L("Material flow for the second pass of two-pass bridges.\n"
+                    "0.5 means remaining 50% to complete the layer.");
+    def->sidetext = L("ratio");
+    def->min = 0.4;
+    def->max = 0.6;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+    
+    def = this->add("two_pass_second_pass_fan_override", coBool);
+    def->label = L("Normal fan on second pass");
+    def->category = L("Advanced");
+    def->tooltip = L("Use normal fan speed instead of bridge fan speed\n"
+                    "during the second pass of two-pass bridges.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("bridge_anchor_length", coFloat);
+    def->label = L("Bridge anchor length");
+    def->category = L("Advanced");
+    def->tooltip = L("Additional length added to both ends of bridge perimeters "
+                    "to ensure proper adhesion before spanning gaps. "
+                    "Set to 0 to disable anchoring extensions.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 2;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0.2));
+
     def = this->add("top_one_perimeter_type", coEnum);
     def->label = L("Single perimeter on top surfaces");
     def->category = L("Layers and Perimeters");

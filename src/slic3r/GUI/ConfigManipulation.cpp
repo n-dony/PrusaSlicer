@@ -432,6 +432,13 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
 
     bool have_non_zero_mmu_segmented_region_max_width = !use_beam_interlocking && config->opt_float("mmu_segmented_region_max_width") > 0.;
     toggle_field("mmu_segmented_region_interlocking_depth", have_non_zero_mmu_segmented_region_max_width);
+
+    bool have_two_pass_bridge = config->opt_bool("two_pass_bridge");
+    for (const std::string& key : { "two_pass_first_flow_ratio", 
+                                    "two_pass_second_flow_ratio",
+                                    "two_pass_second_pass_fan_override" }) {
+        toggle_field(key, have_two_pass_bridge);
+    }
 }
 
 void ConfigManipulation::toggle_print_sla_options(DynamicPrintConfig* config)
