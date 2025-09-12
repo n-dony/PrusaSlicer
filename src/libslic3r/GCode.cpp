@@ -3928,7 +3928,7 @@ std::string GCodeGenerator::_extrude(
                                                                                     m_current_dynamic_fan_speed);
     }
 
-    if (dynamic_print_and_fan_speeds.print_speed > -1) {
+    if (dynamic_print_and_fan_speeds.print_speed > -1 && (m_two_pass_bridge.first_pass || !m_two_pass_bridge.active)) {
         speed = dynamic_print_and_fan_speeds.print_speed;
     }
 
