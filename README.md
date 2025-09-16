@@ -5,7 +5,7 @@
   - slicing metadata conservation at extrusion level, 
   - advanced perimeter ordering
   - role-based temperature offsets for injection molding of the first internal perimeter
-  - double pass bridges
+  - double pass bridges (not working at all)
   - <s> high quality and first internal multi-layer injection (not yet added)</s>
 
 These changes were developed with assistance from AI tools to accelerate coding and experimentation. The AI was used as a collaborator for prototyping and code generation, while design decisions and integration were guided by the author.
