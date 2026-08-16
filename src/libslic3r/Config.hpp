@@ -394,7 +394,20 @@ public:
     T value;
     explicit ConfigOptionSingle(T value) : value(std::move(value)) {}
     operator T() const { return this->value; }
-    
+
+    // The private cereal entry point below is also called "serialize", which would otherwise hide
+    // ConfigOption's virtual std::string serialize() const in this class and in any derived class
+    // that does not redeclare it. Pull the virtual back into the overload set; the two differ in
+    // arity, so cereal still resolves serialize(Archive&) to its own entry point.
+    //
+    // Do NOT "fix" the hiding by renaming the cereal entry point to save()/load() instead: every
+    // derived option class declares its own serialize(Archive&), which hides an inherited
+    // serialize(Archive&) but would NOT hide an inherited save()/load() pair. Cereal counts
+    // inherited functions, so the derived class would then offer both a serialize and a save/load
+    // pair and cereal's "more than one compatible serialization function" static_assert fires.
+
+    using ConfigOption::serialize;
+
     void set(const ConfigOption *rhs) override
     {
         if (rhs->type() != this->type())
@@ -527,7 +540,11 @@ public:
     explicit ConfigOptionVector(const std::vector<T> &values) : values(values) {}
     explicit ConfigOptionVector(std::vector<T> &&values) : values(std::move(values)) {}
     std::vector<T> values;
-    
+
+    // See the note in ConfigOptionSingle: un-hide ConfigOption::serialize() without renaming the
+    // cereal entry point (renaming it to save()/load() breaks every derived class).
+    using ConfigOption::serialize;
+
     void set(const ConfigOption *rhs) override
     {
         if (rhs->type() != this->type())
