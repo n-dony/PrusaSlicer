@@ -22,7 +22,7 @@ namespace Slic3r {
 unsigned int PrintRegion::extruder(FlowRole role) const
 {
     size_t extruder = 0;
-    if (role == frPerimeter || role == frExternalPerimeter)
+    if (role == frPerimeter || role == frExternalPerimeter || role == frFirstInternalPerimeter || role == frSecondInternalPerimeter)
         extruder = m_config.perimeter_extruder;
     else if (role == frInfill)
         extruder = m_config.infill_extruder;
@@ -43,6 +43,10 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
         config_width = print_config.first_layer_extrusion_width;
     } else if (role == frExternalPerimeter) {
         config_width = m_config.external_perimeter_extrusion_width;
+    } else if (role == frFirstInternalPerimeter || role == frSecondInternalPerimeter) {
+        // TODO: give these their own extrusion-width option once Arachne can vary width by role;
+        // for now both fall back to the generic perimeter width, same as plain internal perimeters.
+        config_width = m_config.perimeter_extrusion_width;
     } else if (role == frPerimeter) {
         config_width = m_config.perimeter_extrusion_width;
     } else if (role == frInfill) {
