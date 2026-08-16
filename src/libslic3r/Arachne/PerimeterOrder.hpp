@@ -40,11 +40,23 @@ struct PerimeterExtrusion
 
     // Returns if ExtrusionLine is an external or an internal perimeter.
     bool is_external_perimeter() const { return extrusion.is_external_perimeter(); }
+    bool is_first_internal_perimeter() const { return extrusion.is_first_internal_perimeter(); }
+    bool is_second_internal_perimeter() const { return extrusion.is_second_internal_perimeter(); }
+
+    // 0 = external, 1 = first internal, 2 = second internal, 3+ = generic internal.
+    size_t perimeter_number() const { return depth; }
 };
 
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
 
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first);
+// swap_first_int_w_ext_perimeter: move the first internal perimeter of each group to print last within that group ("groove injection").
+// reverse_internal_perimeters: within each group, reverse the print order of internal perimeters at depth >= reverse_internal_perimeters_at.
+PerimeterExtrusions ordered_perimeter_extrusions(
+    const Perimeters &perimeters,
+    bool external_perimeters_first,
+    bool swap_first_int_w_ext_perimeter = false,
+    bool reverse_internal_perimeters = false,
+    int  reverse_internal_perimeters_at = 0);
 
 } // namespace Slic3r::Arachne::PerimeterOrder
 

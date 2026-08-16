@@ -215,7 +215,12 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
     return grouped_extrusions_order;
 }
 
-static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterExtrusions &sorted_perimeter_extrusions, const bool external_perimeters_first) {
+static PerimeterExtrusions extract_ordered_perimeter_extrusions(
+    const PerimeterExtrusions &sorted_perimeter_extrusions,
+    const bool external_perimeters_first,
+    const bool swap_first_int_w_ext_perimeter,
+    const bool reverse_internal_perimeters,
+    const int  reverse_internal_perimeters_at) {
     // Extrusions are ordered inside each group.
     std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
 
@@ -260,8 +265,47 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
             }
         }
 
+        std::vector<const PerimeterExtrusion *> &group = grouped_extrusions.back().extrusions;
+
+        // The DFS above emits the group from the external perimeter inward, following each branch of
+        // the adjacency graph to its end before starting the next one. That branch grouping is what
+        // keeps a group printing as a continuous inward spiral, so it must be preserved: do not sort
+        // the group by depth (that interleaves the branches). Reverse the whole group for inside-out,
+        // exactly as upstream does.
         if (!external_perimeters_first)
-            std::reverse(grouped_extrusions.back().extrusions.begin(), grouped_extrusions.back().extrusions.end());
+            std::reverse(group.begin(), group.end());
+
+        // reverse_internal_perimeters_at counts depth from the external perimeter: 1 = reverse every
+        // internal perimeter, 2 = reverse from the second internal perimeter inward, etc.
+        //
+        // Reverse only the subsequence of perimeters at that depth or deeper, leaving the positions
+        // they occupy untouched. Everything else -- the external perimeter, the shallower internal
+        // perimeters, and the branch structure -- therefore keeps its place, and the result is
+        // correct for both print directions. (A partition-based implementation would instead hoist
+        // every shallow perimeter, including the external one, to the front of the group whenever
+        // external_perimeters_first is off.)
+        if (reverse_internal_perimeters && reverse_internal_perimeters_at > 0) {
+            std::vector<size_t> positions;
+            positions.reserve(group.size());
+            for (size_t idx = 0; idx < group.size(); ++idx)
+                if (static_cast<int>(group[idx]->depth) >= reverse_internal_perimeters_at)
+                    positions.emplace_back(idx);
+
+            for (size_t lo = 0, hi = positions.size(); lo + 1 < hi; ++lo, --hi)
+                std::swap(group[positions[lo]], group[positions[hi - 1]]);
+        }
+
+        // "Groove injection": print the first internal perimeter last within its group, after everything
+        // else including the external perimeter, instead of immediately after it.
+        if (swap_first_int_w_ext_perimeter) {
+            // stable_partition leaves the depth==1 (false-predicate) items as a contiguous block at
+            // the end, in their original relative order -- exactly "moved to print last". This is
+            // correct for both directions: the last slot of the group is the last thing printed,
+            // whether the group runs outside-in or inside-out.
+            std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
+                return p->depth != 1;
+            });
+        }
     }
 
     const std::vector<size_t> grouped_extrusion_order = order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
@@ -277,11 +321,17 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
 
 // FIXME: From the point of better patch planning, it should be better to do ordering when we have generated all extrusions (for now, when G-Code is exported).
 // FIXME: It would be better to extract the adjacency graph of extrusions from the SkeletalTrapezoidation graph.
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first) {
+PerimeterExtrusions ordered_perimeter_extrusions(
+    const Perimeters &perimeters,
+    const bool external_perimeters_first,
+    const bool swap_first_int_w_ext_perimeter,
+    const bool reverse_internal_perimeters,
+    const int  reverse_internal_perimeters_at) {
     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
-    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
+    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first,
+                                                 swap_first_int_w_ext_perimeter, reverse_internal_perimeters, reverse_internal_perimeters_at);
 }
 
 } // namespace Slic3r::Arachne::PerimeterOrder
