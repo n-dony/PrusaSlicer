@@ -27,6 +27,17 @@ static const std::string EXTRUDE_SET_SPEED_TAG = ";_EXTRUDE_SET_SPEED";
 static const std::string EXTERNAL_PERIMETER_TAG = ";_EXTERNAL_PERIMETER";
 static const std::string INTERNAL_PERIMETER_TAG = ";_INTERNAL_PERIMETER";
 
+// Roles that carry a ";_INTERNAL_PERIMETER<depth>" tag. The first and second internal perimeter have
+// their own GCodeExtrusionRole but are still tagged with their depth, so they must be recognized here
+// too -- otherwise the tag is dropped when this filter rewrites the line, and CoolingBuffer (which
+// runs after this filter) never sees it.
+static inline bool is_tagged_internal_perimeter(GCodeExtrusionRole role)
+{
+    return role == GCodeExtrusionRole::Perimeter
+        || role == GCodeExtrusionRole::FirstInternalPerimeter
+        || role == GCodeExtrusionRole::SecondInternalPerimeter;
+}
+
 // Maximum segment length to split a long segment if the initial and the final flow rate differ.
 // Smaller value means a smoother transition between two different flow rates.
 static constexpr float max_segment_length = 5.f;
@@ -366,7 +377,7 @@ bool PressureEqualizer::process_line(const char *line, const char *line_end, GCo
 
             if (m_current_extrusion_role == GCodeExtrusionRole::ExternalPerimeter) {
                 m_current_perimeter_index = 0;
-            } else if (m_current_extrusion_role == GCodeExtrusionRole::Perimeter) {
+            } else if (is_tagged_internal_perimeter(m_current_extrusion_role)) {
                 auto internal_perimeter_it_range = boost::find_last(str_line, INTERNAL_PERIMETER_TAG);
                 if (!internal_perimeter_it_range.empty()) {
                     uint16_t    perimetr_index = 0;
@@ -847,7 +858,7 @@ void PressureEqualizer::push_line_to_output(const size_t line_idx, float new_fee
     feedrate_formatter.emit_string(std::string(EXTRUDE_SET_SPEED_TAG.data(), EXTRUDE_SET_SPEED_TAG.length()));
     if (line.extrusion_role == GCodeExtrusionRole::ExternalPerimeter) {
         feedrate_formatter.emit_string(std::string(EXTERNAL_PERIMETER_TAG.data(), EXTERNAL_PERIMETER_TAG.length()));
-    } else if (line.extrusion_role == GCodeExtrusionRole::Perimeter && line.perimeter_index.has_value()) {
+    } else if (is_tagged_internal_perimeter(line.extrusion_role) && line.perimeter_index.has_value()) {
         feedrate_formatter.emit_string(std::string(INTERNAL_PERIMETER_TAG.data(), INTERNAL_PERIMETER_TAG.length()) + std::to_string(*line.perimeter_index));
     }
 
