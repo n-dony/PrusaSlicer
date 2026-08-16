@@ -1,6 +1,10 @@
 Build
 Build.bat
 /build/
+
+# Project meta-files — kept alongside the repo but not tracked
+CLAUDE.md
+MULTI_PASS_AND_LAYER_MERGE_DESIGN.md
 MYMETA.json
 MYMETA.yml
 _build

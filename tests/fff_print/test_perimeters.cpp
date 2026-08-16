@@ -50,7 +50,7 @@ SCENARIO("Perimeter nesting", "[Perimeters]")
         PerimeterGenerator::Parameters perimeter_generator_params(
             1., // layer height
             -1, // layer ID
-            flow, flow, flow, flow,
+            flow, flow, flow, flow, flow, flow,
             static_cast<const PrintRegionConfig&>(config),
             static_cast<const PrintObjectConfig&>(config),
             static_cast<const PrintConfig&>(config),
@@ -312,6 +312,8 @@ SCENARIO("Perimeters", "[Perimeters]")
             { "perimeters",                 1 },
             { "perimeter_speed",            77 },
             { "external_perimeter_speed",   66 },
+            { "first_internal_perimeter_speed",   66 },
+            { "second_internal_perimeter_speed",   66 },
             { "enable_dynamic_overhang_speeds", false },
             { "bridge_speed",               99 },
             { "cooling",                    "1" },
