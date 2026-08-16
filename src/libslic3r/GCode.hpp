@@ -44,8 +44,10 @@
 #include "EdgeGrid.hpp"
 #include "tcbspan/span.hpp"
 
+#include <cstdlib>
 #include <memory>
 #include <map>
+#include <optional>
 #include <string>
 
 //#include "GCode/PressureEqualizer.hpp"
@@ -429,6 +431,10 @@ private:
     unsigned int                        m_layer_count;
     // Progress bar indicator. Increments from -1 up to layer_count.
     int                                 m_layer_index;
+    // Whether the object layer being processed is the topmost layer of its PrintObject.
+    // Same granularity as the existing m_config.apply(layer.object()->config()) call in process_layer:
+    // reflects the first object_layer found for this Z, not every instance/object sharing that Z.
+    bool                                m_is_topmost_object_layer{false};
     // Current layer processed. In sequential printing mode, only a single copy will be printed.
     // In non-sequential mode, all its copies will be printed.
     const Layer*                        m_layer;
@@ -450,6 +456,39 @@ private:
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
     std::unique_ptr<SpiralVase>         m_spiral_vase;
+    // Tracks the nozzle temperature this system believes the printer is currently at, so repeated
+    // extrusions at the same effective temperature don't each re-emit a redundant M104/M109.
+    //
+    // The offset system is not the only thing that commands temperatures: the 1st->2nd layer
+    // transition, toolchanges, ooze prevention and custom G-code all do too. Every such site must
+    // either seed this cache with the temperature it just commanded (note_temperature_set) or
+    // declare the current temperature unknown (invalidate) -- otherwise a stale cached value
+    // suppresses a temperature change that is genuinely needed.
+    struct RegionTemperatureManager {
+        // std::nullopt == "the current nozzle temperature was set by something other than this
+        // system, so we cannot compare against it"; the next extrusion then always re-emits.
+        std::optional<int> last_set_temperature;
+        // Returns the offset in degrees C for the given role, or 0 if offsets are disabled, this is
+        // the first layer, or (with temperature_offset_layers == SkipTopmost) this is the topmost
+        // layer of the object.
+        int get_temperature_offset(ExtrusionRole role,
+                            const PrintConfig& config,
+                            int layer_index,
+                            bool is_topmost_layer) const;
+        // Should a temperature command be emitted to reach target_temp?
+        bool needs_temperature_change(int target_temp, double change_threshold) const {
+            if (! this->last_set_temperature.has_value())
+                return true;
+            const int delta = target_temp - *this->last_set_temperature;
+            return delta != 0 && double(std::abs(delta)) >= change_threshold;
+        }
+        // Record a temperature commanded by this system or by any other part of the G-code export.
+        void note_temperature_set(int temperature) { this->last_set_temperature = temperature; }
+        // The current nozzle temperature is no longer known to us (e.g. wipe tower toolchange).
+        void invalidate() { this->last_set_temperature.reset(); }
+    };
+
+    RegionTemperatureManager            m_temperature_manager;
     std::unique_ptr<GCodeFindReplace>   m_find_replace;
     std::unique_ptr<PressureEqualizer>  m_pressure_equalizer;
     std::unique_ptr<GCode::WipeTowerIntegration> m_wipe_tower;

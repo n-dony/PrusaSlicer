@@ -180,6 +180,55 @@ namespace Slic3r {
 
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
 
+int GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
+    ExtrusionRole role,
+    const PrintConfig& config,
+    int layer_index,
+    bool is_topmost_layer) const
+{
+    // Always skip the first layer -- non-negotiable for bed adhesion.
+    if (layer_index <= 0)
+        return 0;
+
+    if (!config.enable_temperature_offsets)
+        return 0;
+
+    if (config.temperature_offset_layers == TemperatureOffsetLayers::SkipTopmost && is_topmost_layer)
+        return 0;
+
+    // Bridging perimeters of any depth (external, first-internal, second-internal, generic)
+    // all share overhang_perimeter_temperature_offset. Check bridge first so that e.g.
+    // Perimeter|External|Bridge does not fall through to ExternalPerimeter's offset.
+    if (role.is_perimeter() && role.is_bridge())
+        return config.overhang_perimeter_temperature_offset.value;
+    if (role == ExtrusionRole::ExternalPerimeter)
+        return config.external_perimeter_temperature_offset.value;
+    if (role == ExtrusionRole::FirstInternalPerimeter)
+        return config.first_internal_perimeter_temperature_offset.value;
+    if (role == ExtrusionRole::SecondInternalPerimeter)
+        return config.second_internal_perimeter_temperature_offset.value;
+    if (role == ExtrusionRole::Perimeter)
+        return config.perimeter_temperature_offset.value;
+    if (role == ExtrusionRole::InternalInfill)
+        return config.infill_temperature_offset.value;
+    if (role == ExtrusionRole::SolidInfill)
+        return config.solid_infill_temperature_offset.value;
+    if (role == ExtrusionRole::TopSolidInfill)
+        return config.top_solid_infill_temperature_offset.value;
+    if (role == ExtrusionRole::SupportMaterial)
+        return config.support_material_temperature_offset.value;
+    if (role == ExtrusionRole::SupportMaterialInterface)
+        return config.support_material_interface_temperature_offset.value;
+    if (role == ExtrusionRole::BridgeInfill)
+        return config.bridge_temperature_offset.value;
+    if (role == ExtrusionRole::GapFill)
+        return config.gap_fill_temperature_offset.value;
+    if (role == ExtrusionRole::Ironing)
+        return config.ironing_temperature_offset.value;
+
+    return 0;
+}
+
 void GCodeGenerator::PlaceholderParserIntegration::reset()
 {
     this->failed_templates.clear();
@@ -1112,6 +1161,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
         for (size_t region_id = 0; region_id < print.num_print_regions(); ++ region_id) {
             const PrintRegion &region = print.get_print_region(region_id);
             file.write_format("; external perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frExternalPerimeter, layer_height).width());
+            file.write_format("; first internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frFirstInternalPerimeter, layer_height).width());
+            file.write_format("; second internal perimeters extrusion width = %.2fmm\n", region.flow(*first_object, frSecondInternalPerimeter, layer_height).width());
             file.write_format("; perimeters extrusion width = %.2fmm\n",          region.flow(*first_object, frPerimeter,         layer_height).width());
             file.write_format("; infill extrusion width = %.2fmm\n",              region.flow(*first_object, frInfill,            layer_height).width());
             file.write_format("; solid infill extrusion width = %.2fmm\n",        region.flow(*first_object, frSolidInfill,       layer_height).width());
@@ -2598,6 +2649,10 @@ LayerResult GCodeGenerator::process_layer(
 
     // Initialize config with the 1st object to be printed at this layer.
     m_config.apply(layer.object()->config(), true);
+    // Same object/layer this config-apply already uses: is object_layer the last (topmost) layer
+    // of its PrintObject? Feeds the temperature-offset system's "skip topmost layer" option.
+    m_is_topmost_object_layer = (object_layer != nullptr) && !object_layer->object()->layers().empty()
+        && object_layer == object_layer->object()->layers().back();
 
     // Check whether it is possible to apply the spiral vase logic for this layer.
     // Just a reminder: A spiral vase mode is allowed for a single object, single material print only.
@@ -2713,6 +2768,13 @@ LayerResult GCodeGenerator::process_layer(
             if (temperature > 0 && (temperature != print.config().first_layer_temperature.get_at(extruder.id())))
                 gcode += m_writer.set_temperature(temperature, false, extruder.id());
         }
+        // The nozzle of the current extruder is now at its steady-state temperature (either because
+        // the command above was just emitted, or because it already equalled first_layer_temperature).
+        // Seed the offset system's cache with it: without this it would still hold whatever offset
+        // temperature the first layer ended on, and would then suppress the M104 needed to reach the
+        // same offset again on this layer.
+        if (const Extruder *current_extruder = m_writer.extruder(); current_extruder != nullptr)
+            m_temperature_manager.note_temperature_set(print.config().temperature.get_at(current_extruder->id()));
 
         // Bed temperature for layers from the 2nd layer is based on the first printing
         // extruder on the layer or on the extruded in bed_temperature_extruder.
@@ -3440,6 +3502,10 @@ std::string GCodeGenerator::_extrude(
             acceleration = m_config.infill_acceleration.value;
         } else if (m_config.external_perimeter_acceleration > 0 && path_attr.role.is_external_perimeter()) {
             acceleration = m_config.external_perimeter_acceleration.value;
+        } else if (m_config.first_internal_perimeter_acceleration > 0 && path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            acceleration = m_config.first_internal_perimeter_acceleration.value;
+        } else if (m_config.second_internal_perimeter_acceleration > 0 && path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
+            acceleration = m_config.second_internal_perimeter_acceleration.value;
         } else if (m_config.perimeter_acceleration.value > 0 && path_attr.role.is_perimeter()) {
             acceleration = m_config.perimeter_acceleration.value;
         } else {
@@ -3460,6 +3526,10 @@ std::string GCodeGenerator::_extrude(
             speed = m_config.get_abs_value("perimeter_speed");
         } else if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             speed = m_config.get_abs_value("external_perimeter_speed");
+        } else if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            speed = m_config.get_abs_value("first_internal_perimeter_speed");
+        } else if (path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
+            speed = m_config.get_abs_value("second_internal_perimeter_speed");
         } else if (path_attr.role.is_bridge()) {
             assert(path_attr.role.is_perimeter() || path_attr.role == ExtrusionRole::BridgeInfill);
             speed = m_config.get_abs_value("bridge_speed");
@@ -3487,6 +3557,21 @@ std::string GCodeGenerator::_extrude(
     }
     if (m_volumetric_speed != 0. && speed == 0)
         speed = m_volumetric_speed / path_attr.mm3_per_mm;
+
+    if (m_config.enable_temperature_offsets && m_config.autoemit_temperature_commands && m_writer.extruder() && m_layer_index > 0) {
+        const int offset = m_temperature_manager.get_temperature_offset(
+            path_attr.role, m_config, m_layer_index, m_is_topmost_object_layer);
+        // m_layer_index > 0 is already guaranteed above, so this is always the steady-state
+        // per-extruder temperature -- no need for the first-layer branch that guard makes unreachable.
+        const int base_temp   = m_config.temperature.get_at(m_writer.extruder()->id());
+        const int target_temp = std::max(0, base_temp + offset);
+
+        if (m_temperature_manager.needs_temperature_change(target_temp, m_config.temperature_change_threshold.value)) {
+            gcode += m_writer.set_temperature(static_cast<unsigned int>(target_temp), m_config.temperature_wait_for_region_change);
+            m_temperature_manager.note_temperature_set(target_temp);
+        }
+    }
+
     if (this->on_first_layer()) {
         const double first_layer_infill_speed{m_config.get_abs_value("first_layer_infill_speed", speed)};
         if (path_attr.role == ExtrusionRole::SolidInfill && first_layer_infill_speed > 0) {
@@ -3572,6 +3657,10 @@ std::string GCodeGenerator::_extrude(
         if (path_attr.role.is_external_perimeter()) {
             cooling_marker_setspeed_comments += ";_EXTERNAL_PERIMETER";
         } else if (path_attr.role.is_perimeter()) {
+            // The numbered tag carries the perimeter depth, so it already distinguishes the first
+            // and second internal perimeter for CoolingBuffer / PressureEqualizer. Do not add a
+            // role-named marker alongside it: nothing consumes one, and CoolingBuffer only strips
+            // the markers it knows about, so an extra marker would leak into the exported G-code.
             assert(path_attr.perimeter_index.has_value());
             if (path_attr.perimeter_index.has_value()) {
                 cooling_marker_setspeed_comments += ";_INTERNAL_PERIMETER" + std::to_string(*path_attr.perimeter_index);
@@ -3919,6 +4008,11 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
     if (!m_writer.need_toolchange(extruder_id))
         return "";
 
+    // A toolchange switches to a nozzle whose temperature this system did not set (it is set by the
+    // wipe tower, by the SEMM branch further down, or by custom toolchange G-code). Declare it
+    // unknown so the next extrusion re-emits rather than comparing against the old nozzle's value.
+    m_temperature_manager.invalidate();
+
     // if we are running a single-extruder setup, just set the extruder and return nothing
     if (!m_writer.multiple_extruders) {
         this->placeholder_parser().set("current_extruder", extruder_id);
@@ -4022,6 +4116,9 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
                                          m_config.temperature.get_at(extruder_id));
 
         gcode += m_writer.set_temperature(temp, false);
+        // We know exactly what the nozzle was just set to, so the offset system can compare
+        // against it instead of unconditionally re-emitting on the next extrusion.
+        m_temperature_manager.note_temperature_set(temp);
     }
 
     this->placeholder_parser().set("current_extruder", extruder_id);
@@ -4037,10 +4134,15 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
         config.set_key_value("filament_extruder_id", new ConfigOptionInt(int(extruder_id)));
         gcode += this->placeholder_parser_process("start_filament_gcode", start_filament_gcode, extruder_id, &config);
         check_add_eol(gcode);
+        // Custom G-code is opaque to us and may contain its own M104/M109.
+        m_temperature_manager.invalidate();
     }
     // Set the new extruder to the operating temperature.
-    if (m_ooze_prevention.enable)
+    if (m_ooze_prevention.enable) {
         gcode += m_ooze_prevention.post_toolchange(*this);
+        // Ooze prevention just commanded a standby/operating temperature of its own.
+        m_temperature_manager.invalidate();
+    }
 
     // The position is now known after the tool change.
     this->last_position = std::nullopt;
