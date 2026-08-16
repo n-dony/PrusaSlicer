@@ -295,6 +295,8 @@ static const std::array<Color, size_t(EGCodeExtrusionRole::COUNT)> DEFAULT_EXTRU
     {   0, 255,   0 }, // SupportMaterial
     {   0, 128,   0 }, // SupportMaterialInterface
     { 179, 227, 171 }, // WipeTower
+    { 255, 255,  50 }, // FirstInternalPerimeter
+    { 255,  50,  50 }, // SecondInternalPerimeter
     {  94, 209, 148 }  // Custom
 } };
 
