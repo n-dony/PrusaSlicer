@@ -140,6 +140,8 @@ enum class EGCodeExtrusionRole : uint8_t
 	  SupportMaterial,
 	  SupportMaterialInterface,
 	  WipeTower,
+	  FirstInternalPerimeter,
+	  SecondInternalPerimeter,
 	  Custom,
     COUNT
 };
