@@ -54,6 +54,8 @@ struct Parameters {
         int                         layer_id,
         Flow                        perimeter_flow,
         Flow                        ext_perimeter_flow,
+        Flow                        first_internal_perimeter_flow,
+        Flow                        second_internal_perimeter_flow,
         Flow                        overhang_flow,
         Flow                        solid_infill_flow,
         const PrintRegionConfig    &config,
@@ -65,6 +67,8 @@ struct Parameters {
             layer_id(layer_id),
             perimeter_flow(perimeter_flow), 
             ext_perimeter_flow(ext_perimeter_flow),
+            first_internal_perimeter_flow(first_internal_perimeter_flow),
+            second_internal_perimeter_flow(second_internal_perimeter_flow),
             overhang_flow(overhang_flow), 
             solid_infill_flow(solid_infill_flow),
             config(config), 
@@ -73,17 +77,45 @@ struct Parameters {
             perimeter_regions(perimeter_regions),
             spiral_vase(spiral_vase),
             scaled_resolution(scaled<double>(print_config.gcode_resolution.value)),
+            // Keep this in declaration order (see the members below) to avoid -Wreorder.
+            ext_mm3_per_mm(ext_perimeter_flow.mm3_per_mm()),
             mm3_per_mm(perimeter_flow.mm3_per_mm()),
-            ext_mm3_per_mm(ext_perimeter_flow.mm3_per_mm()), 
+            first_internal_mm3_per_mm(first_internal_perimeter_flow.mm3_per_mm()),
+            second_internal_mm3_per_mm(second_internal_perimeter_flow.mm3_per_mm()),
             mm3_per_mm_overhang(overhang_flow.mm3_per_mm())
         {
         }
+
+    // Flow / volumetric rate of a non-overhang perimeter at the given depth: 0 = external,
+    // 1 = first internal, 2 = second internal, 3 and deeper = generic internal perimeter.
+    // Today PrintRegion::flow() resolves the first and second internal perimeter to the same
+    // extrusion width as the generic internal perimeter, so this selection currently produces
+    // identical geometry -- it is the single place that has to change once those roles get their
+    // own extrusion width option.
+    const Flow &perimeter_flow_at_depth(size_t depth) const {
+        switch (depth) {
+        case 0:  return ext_perimeter_flow;
+        case 1:  return first_internal_perimeter_flow;
+        case 2:  return second_internal_perimeter_flow;
+        default: return perimeter_flow;
+        }
+    }
+    double mm3_per_mm_at_depth(size_t depth) const {
+        switch (depth) {
+        case 0:  return ext_mm3_per_mm;
+        case 1:  return first_internal_mm3_per_mm;
+        case 2:  return second_internal_mm3_per_mm;
+        default: return mm3_per_mm;
+        }
+    }
 
     // Input parameters
     double                       layer_height;
     int                          layer_id;
     Flow                         perimeter_flow;
     Flow                         ext_perimeter_flow;
+    Flow                         first_internal_perimeter_flow;
+    Flow                         second_internal_perimeter_flow;
     Flow                         overhang_flow;
     Flow                         solid_infill_flow;
     const PrintRegionConfig     &config;
@@ -96,6 +128,8 @@ struct Parameters {
     double                       scaled_resolution;
     double                       ext_mm3_per_mm;
     double                       mm3_per_mm;
+    double                       first_internal_mm3_per_mm;
+    double                       second_internal_mm3_per_mm;
     double                       mm3_per_mm_overhang;
 
 private:

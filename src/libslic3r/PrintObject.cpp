@@ -1389,10 +1389,19 @@ void PrintObject::discover_vertical_shells()
                         // Then calculate the infill offset.
                         if (perimeters > 0) {
                             Flow extflow = layerm.flow(frExternalPerimeter);
+                            Flow firstintflow = layerm.flow(frFirstInternalPerimeter);
+                            Flow secondintflow = layerm.flow(frSecondInternalPerimeter);
                             Flow flow    = layerm.flow(frPerimeter);
+                            float extra_spacing = 0.f;
+                            if (perimeters >= 2) extra_spacing += firstintflow.scaled_spacing();
+                            if (perimeters >= 3) extra_spacing += secondintflow.scaled_spacing();
+                            if (perimeters > 3)  extra_spacing += (float(perimeters) - 3.f) * flow.scaled_spacing();
                             perimeter_offset = std::max(perimeter_offset,
-                                0.5f * float(extflow.scaled_width() + extflow.scaled_spacing()) + (float(perimeters) - 1.f) * flow.scaled_spacing());
-                            perimeter_min_spacing = std::min(perimeter_min_spacing, float(std::min(extflow.scaled_spacing(), flow.scaled_spacing())));
+                                0.5f * float(extflow.scaled_width() + extflow.scaled_spacing()) + extra_spacing);
+                            float min_internal_spacing = float(flow.scaled_spacing());
+                            if (perimeters >= 2) min_internal_spacing = std::min(min_internal_spacing, float(firstintflow.scaled_spacing()));
+                            if (perimeters >= 3) min_internal_spacing = std::min(min_internal_spacing, float(secondintflow.scaled_spacing()));
+                            perimeter_min_spacing = std::min(perimeter_min_spacing, std::min(float(extflow.scaled_spacing()), min_internal_spacing));
                         }
                         polygons_append(cache.holes, to_polygons(layerm.fill_expolygons()));
                     }
