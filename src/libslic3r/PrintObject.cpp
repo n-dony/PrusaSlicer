@@ -401,6 +401,8 @@ void PrintObject::prepare_infill()
     // combine fill surfaces to honor the "infill every N layers" option
     this->combine_infill();
     m_print->throw_if_canceled();
+    this->combine_perimeters();
+    m_print->throw_if_canceled();
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++ region_id) {
@@ -3237,6 +3239,124 @@ void PrintObject::combine_infill()
         }
     }
 } // void PrintObject::combine_infill()
+
+// Combine perimeters of specific roles across layers, analogous to combine_infill().
+// For each role with every_layers >= 2:
+//   - Groups layers by height (same algorithm as combine_infill stage 1).
+//   - Checks geometry compatibility via fill_expolygons intersection.
+//   - combine=true: scales flow on group-top layer, voids non-top paths.
+//   - combine=false (groove): only voids non-top paths.
+void PrintObject::combine_perimeters()
+{
+    struct RoleSpec {
+        ExtrusionRole role;
+        int           every_layers;
+        bool          combine;
+    };
+
+    for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
+        m_print->throw_if_canceled();
+        const PrintRegion       &region = this->printing_region(region_id);
+        const PrintRegionConfig &cfg    = region.config();
+
+        const std::array<RoleSpec, 3> specs = {{
+            { ExtrusionRole::ExternalPerimeter,      cfg.external_perimeter_every_layers.value,      cfg.external_perimeter_combine.value      },
+            { ExtrusionRole::FirstInternalPerimeter,  cfg.first_internal_perimeter_every_layers.value,  cfg.first_internal_perimeter_combine.value  },
+            { ExtrusionRole::SecondInternalPerimeter, cfg.second_internal_perimeter_every_layers.value, cfg.second_internal_perimeter_combine.value },
+        }};
+
+        for (const RoleSpec &spec : specs) {
+            if (spec.every_layers < 2)
+                continue;
+
+            const double nozzle_d = this->print()->config().nozzle_diameter.get_at(
+                region.config().perimeter_extruder.value - 1);
+            // Use nozzle diameter as the max combined height (precision-bound mode).
+            const double max_combine_h = nozzle_d;
+
+            // Stage 1: height-based grouping.
+            std::vector<size_t> combine(m_layers.size(), 0);
+            {
+                double current_h = 0.;
+                size_t n         = 0;
+                for (size_t idx = 0; idx < m_layers.size(); ++idx) {
+                    m_print->throw_if_canceled();
+                    const Layer &layer = *m_layers[idx];
+                    if (layer.id() == 0)
+                        continue; // skip first print layer
+                    if (current_h + layer.height >= max_combine_h + EPSILON ||
+                        n >= size_t(spec.every_layers)) {
+                        combine[idx - 1] = n;
+                        current_h = 0.;
+                        n         = 0;
+                    }
+                    current_h += layer.height;
+                    ++n;
+                }
+                combine[m_layers.size() - 1] = n;
+            }
+
+            // Stage 2: geometry check and apply.
+            for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
+                m_print->throw_if_canceled();
+                const size_t n = combine[top_idx];
+                if (n <= 1)
+                    continue;
+                const size_t group_start = top_idx + 1 - n;
+
+                // Geometry compatibility: intersection of fill_expolygons across window.
+                ExPolygons common = m_layers[group_start]->m_regions[region_id]->fill_expolygons();
+                for (size_t i = group_start + 1; i <= top_idx && !common.empty(); ++i)
+                    common = intersection_ex(common,
+                                             m_layers[i]->m_regions[region_id]->fill_expolygons());
+                if (common.empty())
+                    continue; // geometry incompatible: leave untouched
+
+                // Group-top layer: if combine=true, scale ExtrusionFlow for this role.
+                if (spec.combine) {
+                    const float h_scale = float(n);
+                    LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
+                    for (ExtrusionEntity *ee : top_rm->m_perimeters.entities) {
+                        if (auto *loop = dynamic_cast<ExtrusionLoop *>(ee)) {
+                            for (ExtrusionPath &path : loop->paths) {
+                                if (path.role() == spec.role) {
+                                    ExtrusionAttributes a = path.attributes();
+                                    a.mm3_per_mm *= h_scale;
+                                    a.height     *= h_scale;
+                                    path.set_attributes(a);
+                                }
+                            }
+                        } else if (auto *path = dynamic_cast<ExtrusionPath *>(ee)) {
+                            if (path->role() == spec.role) {
+                                ExtrusionAttributes a = path->attributes();
+                                a.mm3_per_mm *= h_scale;
+                                a.height     *= h_scale;
+                                path->set_attributes(a);
+                            }
+                        }
+                    }
+                }
+
+                // Non-top layers: void the role's paths (groove or combine).
+                // We clear path geometry rather than removing vector entries to
+                // avoid invalidating LayerIsland::perimeters index ranges.
+                for (size_t i = group_start; i < top_idx; ++i) {
+                    LayerRegion *rm = m_layers[i]->m_regions[region_id];
+                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                        if (auto *loop = dynamic_cast<ExtrusionLoop *>(ee)) {
+                            if (!loop->paths.empty() &&
+                                loop->paths.front().role() == spec.role)
+                                loop->paths.clear();
+                        } else if (auto *path = dynamic_cast<ExtrusionPath *>(ee)) {
+                            if (path->role() == spec.role)
+                                path->polyline = Polyline{};
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 void PrintObject::_generate_support_material()
 {
