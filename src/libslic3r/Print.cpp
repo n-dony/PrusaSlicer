@@ -190,7 +190,28 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "use_volumetric_e",
         "variable_layer_height",
         "wipe",
-        "wipe_tower_acceleration"
+        "wipe_tower_acceleration",
+        // Temperature-offset options (fork additions) — only affect G-code emission, never geometry.
+        "enable_temperature_offsets",
+        "temperature_offset_layers",
+        "temperature_change_threshold",
+        "temperature_wait_for_region_change",
+        "external_perimeter_temperature_offset",
+        "first_internal_perimeter_temperature_offset",
+        "second_internal_perimeter_temperature_offset",
+        "perimeter_temperature_offset",
+        "infill_temperature_offset",
+        "solid_infill_temperature_offset",
+        "top_solid_infill_temperature_offset",
+        "support_material_temperature_offset",
+        "support_material_interface_temperature_offset",
+        "bridge_temperature_offset",
+        "overhang_perimeter_temperature_offset",
+        "gap_fill_temperature_offset",
+        // Multi-pass bridge options (fork additions) — present in config but machinery not implemented;
+        // map to psGCodeExport so a config change does not silently reuse stale G-code.
+        "two_pass_bridge",
+        "bridge_pass_count"
     };
 
     static std::unordered_set<std::string> steps_ignore;

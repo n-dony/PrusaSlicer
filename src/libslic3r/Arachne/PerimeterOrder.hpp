@@ -16,7 +16,14 @@ namespace Slic3r::Arachne::PerimeterOrder {
 struct PerimeterExtrusion
 {
     explicit PerimeterExtrusion(const Arachne::ExtrusionLine &extrusion, const double area, const Polygon &polygon, const BoundingBox &bbox)
-        : extrusion(extrusion), area(area), polygon(polygon), bbox(bbox) {}
+        : inset_idx(extrusion.inset_idx), extrusion(extrusion), area(area), polygon(polygon), bbox(bbox) {}
+
+    // Physical inset index from the outside: 0 = external perimeter, 1 = first internal,
+    // 2 = second internal, etc. Copied directly from ExtrusionLine::inset_idx at construction,
+    // which is the authoritative source set by Arachne's skeleton algorithm.
+    // Use this (not depth) for any decision that must match the FirstInternalPerimeter /
+    // SecondInternalPerimeter role assignments made in PerimeterGenerator.cpp.
+    size_t                             inset_idx                  = std::numeric_limits<size_t>::max();
 
     Arachne::ExtrusionLine             extrusion;
     // Absolute value of the area of the polygon. The value is always non-negative, even for holes.
@@ -28,7 +35,10 @@ struct PerimeterExtrusion
 
     std::vector<PerimeterExtrusion *>  adjacent_perimeter_extrusions;
 
-    // How far is this perimeter from the nearest external perimeter. Contour is always preferred over holes.
+    // Graph distance from the nearest external perimeter (BFS depth). Contour is always preferred
+    // over holes. In simple, non-branching regions depth == inset_idx. In thin-wall or branching
+    // regions they can diverge: depth reflects graph topology while inset_idx reflects the physical
+    // wall slot. Prefer inset_idx for role-based decisions; keep depth for graph traversal only.
     size_t                             depth                      = std::numeric_limits<size_t>::max();
     PerimeterExtrusion                *nearest_external_perimeter = nullptr;
 
@@ -43,8 +53,6 @@ struct PerimeterExtrusion
     bool is_first_internal_perimeter() const { return extrusion.is_first_internal_perimeter(); }
     bool is_second_internal_perimeter() const { return extrusion.is_second_internal_perimeter(); }
 
-    // 0 = external, 1 = first internal, 2 = second internal, 3+ = generic internal.
-    size_t perimeter_number() const { return depth; }
 };
 
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;

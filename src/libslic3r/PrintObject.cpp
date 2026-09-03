@@ -733,6 +733,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "perimeter_extrusion_width"
             || opt_key == "infill_overlap"
             || opt_key == "external_perimeters_first"
+            || opt_key == "swap_first_int_w_ext_perimeter"
+            || opt_key == "reverse_internal_perimeters"
+            || opt_key == "reverse_internal_perimeters_at"
             || opt_key == "arc_fitting"
             || opt_key == "top_one_perimeter_type"
             || opt_key == "only_one_perimeter_first_layer"
@@ -937,6 +940,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_material_interface_speed"
             || opt_key == "bridge_speed"
             || opt_key == "external_perimeter_speed"
+            || opt_key == "first_internal_perimeter_speed"
+            || opt_key == "second_internal_perimeter_speed"
+            || opt_key == "first_internal_perimeter_acceleration"
+            || opt_key == "second_internal_perimeter_acceleration"
             || opt_key == "small_perimeter_speed"
             || opt_key == "solid_infill_speed"
             || opt_key == "first_layer_infill_speed"
@@ -3260,6 +3267,10 @@ void PrintObject::combine_perimeters()
     if (m_config.spiral_vase)
         return;
 
+    // Nothing to combine when there is fewer than 2 layers.
+    if (m_layers.size() < 2)
+        return;
+
     struct RoleSpec {
         ExtrusionRole role;
         int           every_layers;
@@ -3290,8 +3301,9 @@ void PrintObject::combine_perimeters()
 
             // Map ExtrusionRole -> FlowRole for LayerRegion::flow().
             const FlowRole flow_role =
-                (spec.role == ExtrusionRole::ExternalPerimeter) ? frExternalPerimeter :
-                                                                  frPerimeter;
+                (spec.role == ExtrusionRole::ExternalPerimeter)       ? frExternalPerimeter :
+                (spec.role == ExtrusionRole::FirstInternalPerimeter)  ? frFirstInternalPerimeter :
+                                                                        frSecondInternalPerimeter;
 
             // Bitmask-safe role predicate (catches OverhangPerimeter variants too).
             auto role_matches = [&](ExtrusionRole r) -> bool {
@@ -3338,6 +3350,33 @@ void PrintObject::combine_perimeters()
                 if (common.empty())
                     continue;
 
+                // Only combine when geometry is nearly prismatic across the group.
+                // If the common area is less than 90 % of the top layer's fill area,
+                // the layers diverge too much (e.g. an overhang begins) and combining
+                // would extrude material in the wrong place.
+                {
+                    const double common_area   = area(common);
+                    const double top_fill_area = area(m_layers[top_idx]->m_regions[region_id]->fill_expolygons());
+                    if (top_fill_area > 0.0 && common_area / top_fill_area < 0.9)
+                        continue;
+                }
+
+                // Skip regions where layer-region merging has redirected perimeters
+                // into another region.  Merged non-config regions have an empty
+                // m_perimeters.entities vector; operating on them produces empty walk
+                // iterations that corrupt the top layer's flow attributes.
+                {
+                    bool region_has_perimeters = false;
+                    for (size_t i = group_start; i <= top_idx; ++i) {
+                        if (!m_layers[i]->m_regions[region_id]->m_perimeters.entities.empty()) {
+                            region_has_perimeters = true;
+                            break;
+                        }
+                    }
+                    if (!region_has_perimeters)
+                        continue;
+                }
+
                 // Sum actual layer heights for correct combined flow (not n * top_height).
                 double H = 0.;
                 for (size_t i = group_start; i <= top_idx; ++i)
@@ -3381,16 +3420,15 @@ void PrintObject::combine_perimeters()
                     });
                 }
 
-                // Void matching paths on non-top layers. Clear the polyline and reset
-                // the role to None so role-filtered consumers skip the empty entity.
+                // Void matching paths on non-top layers. Clear the polyline so the
+                // path carries no geometry; the role is intentionally preserved so
+                // role-gated consumers (e.g. split_with_seam in GCode.cpp) see a
+                // valid perimeter role and do not perform an out-of-bounds access.
                 for (size_t i = group_start; i < top_idx; ++i) {
                     walk(m_layers[i]->m_regions[region_id], [&](ExtrusionPath &path) {
                         if (!role_matches(path.role()))
                             return;
                         path.polyline = Polyline{};
-                        ExtrusionAttributes a = path.attributes();
-                        a.role = ExtrusionRole::None;
-                        path.set_attributes(a);
                     });
                 }
             }

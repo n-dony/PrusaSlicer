@@ -1825,6 +1825,7 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("temperature_offset_layers", coEnum);
     def->label = L("Apply temperature offsets to");
+    def->category = L("Temperature");
     def->tooltip = L("Control which layers receive temperature offsets. "
                     "First layer is always excluded.");
     def->mode = comExpert;
@@ -4006,9 +4007,9 @@ void PrintConfigDef::init_fff_params()
     def = this->add("two_pass_bridge", coBool);
     def->label = L("Two-pass bridge");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print bridge infill in multiple passes. Each pass deposits an equal "
-                      "share of the total bridge height, allowing early passes to firm up "
-                      "before later passes land on them.");
+    def->tooltip = L("[Experimental] Re-extrude bridge infill in multiple passes (see Bridge pass count) "
+                      "to improve bridge quality by layering extrusions. "
+                      "Note: no dwell time between passes — each pass immediately follows the previous.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
