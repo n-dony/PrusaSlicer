@@ -2212,13 +2212,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("external_perimeter_combine", coBool);
-    def->label = L("Combine external perimeter extrusions");
-    def->category = L("Layers and Perimeters");
-    def->tooltip = L("When external_perimeter_every_layers >= 2, combine the skipped layers into one thick extrusion on the group-top layer (combine=true), or leave a void / groove (combine=false).");
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(false));
-
     def = this->add("first_internal_perimeter_every_layers", coInt);
     def->label = L("First internal perimeter every N layers");
     def->category = L("Layers and Perimeters");
@@ -2228,13 +2221,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("first_internal_perimeter_combine", coBool);
-    def->label = L("Combine first internal perimeter extrusions");
-    def->category = L("Layers and Perimeters");
-    def->tooltip = L("When first_internal_perimeter_every_layers >= 2, combine skipped layers into one thick extrusion (true) or leave a groove void (false).");
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(false));
-
     def = this->add("second_internal_perimeter_every_layers", coInt);
     def->label = L("Second internal perimeter every N layers");
     def->category = L("Layers and Perimeters");
@@ -2243,13 +2229,6 @@ void PrintConfigDef::init_fff_params()
     def->min = 1;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
-
-    def = this->add("second_internal_perimeter_combine", coBool);
-    def->label = L("Combine second internal perimeter extrusions");
-    def->category = L("Layers and Perimeters");
-    def->tooltip = L("When second_internal_perimeter_every_layers >= 2, combine skipped layers into one thick extrusion (true) or leave a groove void (false).");
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(false));
 
     auto def_infill_anchor_min = def = this->add("infill_anchor", coFloatOrPercent);
     def->label = L("Length of the infill anchor");
