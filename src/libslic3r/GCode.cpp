@@ -776,6 +776,8 @@ namespace DoExport {
 	                if (region.config().get_abs_value("perimeter_speed") == 0 ||
 	                    region.config().get_abs_value("small_perimeter_speed") == 0 ||
 	                    region.config().get_abs_value("external_perimeter_speed") == 0 ||
+	                    region.config().get_abs_value("first_internal_perimeter_speed") == 0 ||
+	                    region.config().get_abs_value("second_internal_perimeter_speed") == 0 ||
 	                    region.config().get_abs_value("bridge_speed") == 0)
 	                    mm3_per_mm.push_back(layerm->perimeters().min_mm3_per_mm());
 	                if (region.config().get_abs_value("infill_speed") == 0 ||
@@ -2826,6 +2828,7 @@ LayerResult GCodeGenerator::process_layer(
         } else {
             gcode += custom_gcode;
         }
+        m_temperature_manager.invalidate(); // user gcode may contain M104/M109
     }
 
     this->set_origin({0, 0});
@@ -2853,6 +2856,7 @@ LayerResult GCodeGenerator::process_layer(
             assert(m_pending_pre_extrusion_gcode.empty());
             // Now we have picked the right extruder, so we can emit the custom g-code.
             gcode += ProcessLayer::emit_custom_gcode_per_print_z(*this, *layer_tools.custom_gcode, m_writer.extruder()->id(), first_extruder_id, print.config());
+            m_temperature_manager.invalidate(); // user gcode may contain M104/M109
         }
 
         if (!extruder_extrusions.skirt.empty() || !extruder_extrusions.brim.empty()) {
@@ -3500,6 +3504,7 @@ std::string GCodeGenerator::_extrude(
         // There is G-Code that is due to be inserted before an extrusion starts. Insert it.
         gcode += m_pending_pre_extrusion_gcode;
         m_pending_pre_extrusion_gcode.clear();
+        m_temperature_manager.invalidate(); // color_change_gcode may contain M104/M109
     }
 
     // adjust acceleration
@@ -3575,11 +3580,12 @@ std::string GCodeGenerator::_extrude(
     if (m_volumetric_speed != 0. && speed == 0)
         speed = m_volumetric_speed / path_attr.mm3_per_mm;
 
-    if (m_config.enable_temperature_offsets && m_config.autoemit_temperature_commands && m_writer.extruder() && m_layer_index > 0) {
+    if (m_config.enable_temperature_offsets && m_config.autoemit_temperature_commands && m_writer.extruder() && m_layer != nullptr && m_layer->id() != 0) {
         const int offset = m_temperature_manager.get_temperature_offset(
             path_attr.role, m_config, m_layer_index, m_is_topmost_object_layer);
-        // m_layer_index > 0 is already guaranteed above, so this is always the steady-state
-        // per-extruder temperature -- no need for the first-layer branch that guard makes unreachable.
+        // m_layer->id() != 0 ensures we skip the first layer of every object (including
+        // objects printed sequentially after the first), not just the global first layer.
+        // m_layer_index is a monotonic counter that is never reset between objects.
         const int base_temp   = m_config.temperature.get_at(m_writer.extruder()->id());
         // base_temp == 0 means temperature control is disabled for this extruder.
         // Do not emit a spurious M104/M109 in that case.
