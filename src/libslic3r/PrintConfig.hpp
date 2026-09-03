@@ -786,6 +786,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                  infill_extruder))
     ((ConfigOptionFloatOrPercent,       infill_extrusion_width))
     ((ConfigOptionInt,                  infill_every_layers))
+    ((ConfigOptionBool,                 external_perimeter_combine))
+    ((ConfigOptionInt,                  external_perimeter_every_layers))
+    ((ConfigOptionBool,                 first_internal_perimeter_combine))
+    ((ConfigOptionInt,                  first_internal_perimeter_every_layers))
+    ((ConfigOptionBool,                 second_internal_perimeter_combine))
+    ((ConfigOptionInt,                  second_internal_perimeter_every_layers))
     ((ConfigOptionFloatOrPercent,       infill_overlap))
     ((ConfigOptionFloat,                infill_speed))
     // Ironing options
