@@ -299,7 +299,7 @@ using PerimeterGeneratorLoops = std::vector<PerimeterGeneratorLoop>;
 // what apply_perimeter_ordering_classic permutes within. next_group_id is the shared counter used
 // to hand out group ids across the whole recursion.
 static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator::Parameters &params, const Polygons &lower_slices_polygons_cache, const PerimeterGeneratorLoops &loops, ThickPolylines &thin_walls,
-                                                        std::vector<int> &out_group_ids, int &next_group_id, int enclosing_group)
+                                                        std::vector<int> &out_group_ids, int &next_group_id, int enclosing_group, bool enclosing_is_contour)
 {
     using namespace Slic3r::Feature::FuzzySkin;
 
@@ -411,11 +411,14 @@ static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator
             assert(thin_walls.empty());
             // An external perimeter opens a new group; everything nested inside it stays in that
             // group. A hole restarts at depth 0, so it opens its own group, exactly as it would in
-            // the Arachne ordering.
-            const int loop_group = loop.is_external() ? next_group_id ++ : enclosing_group;
+            // the Arachne ordering. Additionally, crossing the contour/hole boundary (is_contour
+            // differs from the enclosing loop) always starts a new group so that hole perimeters
+            // are never reordered together with contour perimeters.
+            const bool starts_new_family = loop.is_external() || (loop.is_contour != enclosing_is_contour);
+            const int loop_group = starts_new_family ? next_group_id++ : enclosing_group;
             std::vector<int> children_gids;
             ExtrusionEntityCollection children = traverse_loops_classic(params, lower_slices_polygons_cache, loop.children, thin_walls,
-                                                                        children_gids, next_group_id, loop_group);
+                                                                        children_gids, next_group_id, loop_group, loop.is_contour);
             assert(children_gids.size() == children.entities.size());
             out.entities.reserve(out.entities.size() + children.entities.size() + 1);
             ExtrusionLoop *eloop = static_cast<ExtrusionLoop*>(coll.entities[idx.first]);
@@ -1575,7 +1578,7 @@ void PerimeterGenerator::process_classic(
         std::vector<int> perimeter_group_ids;
         int              next_perimeter_group_id = 0;
         ExtrusionEntityCollection entities = traverse_loops_classic(params, lower_slices_polygons_cache, contours.front(), thin_walls,
-                                                                    perimeter_group_ids, next_perimeter_group_id, PERIMETER_GROUP_NONE);
+                                                                    perimeter_group_ids, next_perimeter_group_id, PERIMETER_GROUP_NONE, true);
         // if brim will be printed, reverse the order of perimeters so that
         // we continue inwards after having finished the brim
         // TODO: add test for perimeter order

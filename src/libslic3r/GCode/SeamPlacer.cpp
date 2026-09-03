@@ -322,39 +322,22 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
 
     // ExtrusionRole::Perimeter is inner perimeter.
     if (do_staggering) {
-        int perimeter_depth = 0;
-        if (!loop.paths.empty() && loop.paths.front().attributes().perimeter_index.has_value())
-            perimeter_depth = static_cast<int>(loop.paths.front().attributes().perimeter_index.value());
+        const double depth = (loop_point - seam_choice.position).norm() -
+            loop_width / 2.0;
 
-        double perimeter_length{0.0};
-        Vec2d previous_position{perimeter.positions[0]};
-        for (std::size_t i{1}; i <= perimeter.positions.size(); ++i) {
-            const std::size_t index{i == perimeter.positions.size() ? 0 : i};
-            perimeter_length += (perimeter.positions[index] - previous_position).norm();
-            previous_position = perimeter.positions[index];
-        }
-
-        // Odd depths (1st, 3rd, ... internal perimeter) jump to the opposite side of the loop;
-        // even depths (2nd, 4th, ...) use the normal depth-derived offset below. Alternating is
-        // what keeps successive seams from drifting back into alignment over many walls.
-        const bool alternate_direction{(perimeter_depth % 2) == 1};
-        double depth = (loop_point - seam_choice.position).norm() - loop_width / 2.0;
-        depth = alternate_direction ? perimeter_length / 2.0 : depth;
         const double staggering_offset{depth};
 
-        if (staggering_offset > 0.0) {
-            std::optional<PointOnPerimeter> staggered_point{offset_along_perimeter(
-                {seam_choice.previous_index, seam_choice.next_index, loop_point},
-                perimeter,
-                staggering_offset,
-                offset_direction,
-                offset_stop_condition
-            )};
+        std::optional<PointOnPerimeter> staggered_point{offset_along_perimeter(
+            {seam_choice.previous_index, seam_choice.next_index, loop_point},
+            perimeter,
+            staggering_offset,
+            offset_direction,
+            offset_stop_condition
+        )};
 
-            if (staggered_point) {
-                seam_choice = *staggered_point;
-                std::tie(loop_line_index, loop_point) = project_to_extrusion_loop(seam_choice, perimeter, distancer);
-            }
+        if (staggered_point) {
+            seam_choice = *staggered_point;
+            std::tie(loop_line_index, loop_point) = project_to_extrusion_loop(seam_choice, perimeter, distancer);
         }
     }
 

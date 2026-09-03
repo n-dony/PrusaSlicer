@@ -75,6 +75,7 @@ std::vector<ExtendedPoint> estimate_points_properties(
     const AABBTreeLines::LinesDistancer<L> &unscaled_prev_layer,
     const PropertiesEstimationConfig &config
 ) {
+    if (input_points.empty()) return {}; // skip voided combine_perimeters paths with empty polylines
     bool looped = input_points.front() == input_points.back();
     std::function<size_t(size_t,size_t)> get_prev_index = [](size_t idx, size_t count) {
         if (idx > 0) {

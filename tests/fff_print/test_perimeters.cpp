@@ -632,3 +632,105 @@ SCENARIO("Seam alignment", "[Perimeters]")
         test(Slic3r::Test::TestMesh::small_dorito);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fork-specific tests: new perimeter roles and print-order options (H-4)
+// ---------------------------------------------------------------------------
+
+SCENARIO("Fork: perimeter role assignment for new roles in classic mode", "[Perimeters]")
+{
+    // With perimeters=3 on a plain rectangle, process_classic must assign:
+    //   depth 0  ->  ExternalPerimeter
+    //   depth 1  ->  FirstInternalPerimeter   (fork-new role)
+    //   depth 2  ->  SecondInternalPerimeter  (fork-new role)
+    // Use layer_id=-1 so overhang detection is skipped and each loop
+    // consists of a single ExtrusionPath whose role() is unambiguous.
+    FullPrintConfig config;
+    config.perimeters.value = 3;
+
+    SurfaceCollection slices;
+    slices.append(
+        { ExPolygon{ Polygon::new_scale({ {0,0}, {100,0}, {100,100}, {0,100} }) } },
+        stInternal);
+
+    ExtrusionEntityCollection loops;
+    ExtrusionEntityCollection gap_fill;
+    ExPolygons                fill_expolygons;
+    Flow                      flow(1., 1., 1.);
+    PerimeterRegions          perimeter_regions;
+    PerimeterGenerator::Parameters params(
+        1.,  // layer height
+        -1,  // layer ID — negative keeps overhang detection disabled
+        flow, flow, flow, flow, flow, flow,
+        static_cast<const PrintRegionConfig&>(config),
+        static_cast<const PrintObjectConfig&>(config),
+        static_cast<const PrintConfig&>(config),
+        perimeter_regions,
+        false); // spiral_vase
+    Polygons lower_layer_polygons_cache;
+    for (const Surface &surface : slices)
+        PerimeterGenerator::process_classic(
+            params,
+            surface,
+            nullptr,
+            nullptr,
+            lower_layer_polygons_cache,
+            loops, gap_fill, fill_expolygons);
+
+    loops = loops.flatten();
+
+    THEN("3 loops generated for 3 perimeters") {
+        REQUIRE(loops.entities.size() == 3);
+    }
+    THEN("exactly one ExternalPerimeter loop") {
+        size_t n = std::count_if(loops.entities.begin(), loops.entities.end(),
+            [](const ExtrusionEntity *ee){ return ee->role() == ExtrusionRole::ExternalPerimeter; });
+        REQUIRE(n == 1);
+    }
+    THEN("exactly one FirstInternalPerimeter loop") {
+        size_t n = std::count_if(loops.entities.begin(), loops.entities.end(),
+            [](const ExtrusionEntity *ee){ return ee->role() == ExtrusionRole::FirstInternalPerimeter; });
+        REQUIRE(n == 1);
+    }
+    THEN("exactly one SecondInternalPerimeter loop") {
+        size_t n = std::count_if(loops.entities.begin(), loops.entities.end(),
+            [](const ExtrusionEntity *ee){ return ee->role() == ExtrusionRole::SecondInternalPerimeter; });
+        REQUIRE(n == 1);
+    }
+}
+
+SCENARIO("Fork: external_perimeter_every_layers combine smoke test", "[Perimeters]")
+{
+    // Smoke test: external_perimeter_combine + external_perimeter_every_layers
+    // must slice a simple cube without crashing.  Non-empty G-code is the
+    // primary correctness criterion.
+    auto config = Slic3r::DynamicPrintConfig::full_print_config_with({
+        { "skirts",                          0 },
+        { "perimeters",                      3 },
+        { "external_perimeter_combine",      true },
+        { "external_perimeter_every_layers", 2 },
+        { "cooling",                         "0" },
+        { "first_layer_speed",               "100%" }
+    });
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}
+
+SCENARIO("Fork: reverse_internal_perimeters smoke test", "[Perimeters]")
+{
+    // Smoke test: reverse_internal_perimeters must slice a simple cube without
+    // crashing.  Non-empty G-code is the primary correctness criterion.
+    auto config = Slic3r::DynamicPrintConfig::full_print_config_with({
+        { "skirts",                      0 },
+        { "perimeters",                  3 },
+        { "reverse_internal_perimeters", true },
+        { "cooling",                     "0" },
+        { "first_layer_speed",           "100%" }
+    });
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}

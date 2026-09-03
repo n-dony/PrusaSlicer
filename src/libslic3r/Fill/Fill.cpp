@@ -581,6 +581,9 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                 // Only concentric fills are not sorted.
                 eec->no_sort = f->no_sort();
                 if (params.use_arachne) {
+                    // L-8: Arachne mode produces ThickPolylines, not flat Polylines, so the
+                    // two_pass_bridge feature is not implemented for Arachne fills. The else
+                    // branch below handles two_pass_bridge exclusively for polyline-based fills.
                     for (const ThickPolyline &thick_polyline : thick_polylines) {
                         Flow new_flow = surface_fill.params.flow.with_spacing(float(f->spacing));
 
@@ -615,10 +618,13 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                         const float pass_height = surface_fill.params.flow.height() / float(n_passes);
                         const double pass_mm3   = flow_mm3_per_mm / double(n_passes);
 
-                        // Parent collection preserves pass order — the path chainer must not reorder passes.
-                        ExtrusionEntityCollection *parent_eec = eec;  // reuse the already-allocated collection
-                        parent_eec->no_sort = true;
-                        // eec->entities will hold child EECs (one per pass), not paths directly.
+                        // C-1 fix: use a single flat EEC — all passes' paths go directly into
+                        // eec->entities with no inner EEC per pass. no_sort=true preserves pass
+                        // order so the path chainer cannot interleave passes. The previous
+                        // two-level structure (parent_eec -> pass_eec -> paths) caused all bridge
+                        // infill to be silently dropped by SmoothPathGenerator, which has no EEC
+                        // branch and therefore cannot recurse into child collections.
+                        eec->no_sort = true;
 
                         for (int pass = 0; pass < n_passes; ++pass) {
                             ExtrusionAttributes attrs{
@@ -635,14 +641,11 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                             else
                                 pass_polylines = std::move(polylines);
 
-                            ExtrusionEntityCollection *pass_eec = new ExtrusionEntityCollection();
-                            pass_eec->no_sort = f->no_sort();
                             extrusion_entities_append_paths(
-                                pass_eec->entities, std::move(pass_polylines),
+                                eec->entities, std::move(pass_polylines),
                                 attrs, !params.prefer_clockwise_movements);
-                            parent_eec->entities.push_back(pass_eec);  // child inside parent
                         }
-                        layerm.m_fills.entities.push_back(parent_eec);  // push parent only once
+                        layerm.m_fills.entities.push_back(eec);
                     } else {
                         // When prefer_clockwise_movements is true, we have to ensure that extrusion paths will not be reversed during path planning.
                         extrusion_entities_append_paths(
