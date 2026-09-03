@@ -3264,7 +3264,7 @@ void PrintObject::combine_infill()
 // original thin-layer offsets from PerimeterGenerator (a geometric approximation).
 void PrintObject::combine_perimeters()
 {
-    if (m_config.spiral_vase)
+    if (this->print()->config().spiral_vase)
         return;
 
     // Nothing to combine when there is fewer than 2 layers.
