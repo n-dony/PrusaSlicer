@@ -123,6 +123,7 @@ std::vector<Perimeter> extract_perimeter_extrusions(
 
         for (ExtrusionEntity *ee : *eec) {
             if (ee != nullptr) {
+                if (auto *ep = dynamic_cast<ExtrusionPath *>(ee); ep && ep->polyline.empty()) continue; // skip voided combine_perimeters paths
                 std::optional<InstancePoint> last_position{get_instance_point(previous_position, offset)};
                 bool reverse_loop{false};
                 if (auto loop = dynamic_cast<const ExtrusionLoop *>(ee)) {

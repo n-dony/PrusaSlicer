@@ -288,7 +288,10 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
             std::vector<size_t> positions;
             positions.reserve(group.size());
             for (size_t idx = 0; idx < group.size(); ++idx)
-                if (static_cast<int>(group[idx]->depth) >= reverse_internal_perimeters_at)
+                // Use inset_idx (physical wall slot) rather than depth (graph distance) so that
+                // the threshold matches the FirstInternalPerimeter/SecondInternalPerimeter role
+                // assignments in PerimeterGenerator.cpp, which are also inset_idx-based.
+                if (static_cast<int>(group[idx]->inset_idx) >= reverse_internal_perimeters_at)
                     positions.emplace_back(idx);
 
             for (size_t lo = 0, hi = positions.size(); lo + 1 < hi; ++lo, --hi)
@@ -298,12 +301,18 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
         // "Groove injection": print the first internal perimeter last within its group, after everything
         // else including the external perimeter, instead of immediately after it.
         if (swap_first_int_w_ext_perimeter) {
-            // stable_partition leaves the depth==1 (false-predicate) items as a contiguous block at
-            // the end, in their original relative order -- exactly "moved to print last". This is
-            // correct for both directions: the last slot of the group is the last thing printed,
-            // whether the group runs outside-in or inside-out.
+            // stable_partition leaves the inset_idx==1 (false-predicate) items as a contiguous
+            // block at the end, in their original relative order -- exactly "moved to print last".
+            // This is correct for both directions: the last slot of the group is the last thing
+            // printed, whether the group runs outside-in or inside-out.
+            //
+            // inset_idx (physical wall slot) is used rather than depth (graph distance) so that
+            // the loop deferred here is exactly the loop that carries the FirstInternalPerimeter
+            // role and its associated speed/acceleration settings. In thin or branching regions
+            // depth != inset_idx, and using depth would reorder a loop that does not have that
+            // role, causing a mismatch between print order and the visual/speed assignments.
             std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
-                return p->depth != 1;
+                return p->inset_idx != 1;
             });
         }
     }

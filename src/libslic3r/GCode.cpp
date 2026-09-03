@@ -225,6 +225,8 @@ int GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
         return config.gap_fill_temperature_offset.value;
     if (role == ExtrusionRole::Ironing)
         return config.ironing_temperature_offset.value;
+    if (role == ExtrusionRole::InfillOverBridge)
+        return config.solid_infill_temperature_offset.value;
 
     return 0;
 }
@@ -1390,6 +1392,9 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                 this->_print_first_layer_bed_temperature(file, print, between_objects_gcode, initial_extruder_id, false);
                 this->_print_first_layer_extruder_temperatures(file, print, between_objects_gcode, initial_extruder_id, false);
                 file.writeln(between_objects_gcode);
+                // User G-code may contain M104/M109; declare the cache stale so the next
+                // region extrusion re-evaluates rather than suppressing its temperature command.
+                m_temperature_manager.invalidate();
             }
             // Reset the cooling buffer internal state (the current position, feed rate, accelerations).
             m_cooling_buffer->reset(this->writer().get_position());
@@ -2720,6 +2725,9 @@ LayerResult GCodeGenerator::process_layer(
         gcode += this->placeholder_parser_process("before_layer_gcode",
             print.config().before_layer_gcode.value, m_writer.extruder()->id(), &config)
             + "\n";
+        // User G-code may contain M104/M109; declare the cache stale so the next
+        // region extrusion re-evaluates rather than suppressing its temperature command.
+        m_temperature_manager.invalidate();
     }
 
     // Initialize avoid crossing perimeters before a layer change.
@@ -2752,6 +2760,9 @@ LayerResult GCodeGenerator::process_layer(
         gcode += this->placeholder_parser_process("layer_gcode",
             print.config().layer_gcode.value, m_writer.extruder()->id(), &config)
             + "\n";
+        // User G-code may contain M104/M109; declare the cache stale so the next
+        // region extrusion re-evaluates rather than suppressing its temperature command.
+        m_temperature_manager.invalidate();
     }
 
     if (! first_layer && ! m_second_layer_things_done) {
@@ -2828,8 +2839,14 @@ LayerResult GCodeGenerator::process_layer(
             this->set_extruder(extruder_extrusions.extruder_id, print_z);
 
         // let analyzer tag generator aware of a role type change
-        if (layer_tools.has_wipe_tower && m_wipe_tower)
+        if (layer_tools.has_wipe_tower && m_wipe_tower) {
             m_last_processor_extrusion_role = GCodeExtrusionRole::WipeTower;
+            // Wipe-tower toolchange bypasses set_extruder(), which normally calls
+            // m_temperature_manager.invalidate(). Invalidate here so the offset
+            // system does not compare against the previous extruder's stale cached
+            // temperature on the next extrusion.
+            m_temperature_manager.invalidate();
+        }
 
         if (has_custom_gcode_to_emit && extruder_id_for_custom_gcode == int(extruder_extrusions.extruder_id)) {
             assert(m_writer.extruder()->id() == extruder_id_for_custom_gcode);
@@ -3502,9 +3519,9 @@ std::string GCodeGenerator::_extrude(
             acceleration = m_config.infill_acceleration.value;
         } else if (m_config.external_perimeter_acceleration > 0 && path_attr.role.is_external_perimeter()) {
             acceleration = m_config.external_perimeter_acceleration.value;
-        } else if (m_config.first_internal_perimeter_acceleration > 0 && path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+        } else if (m_config.first_internal_perimeter_acceleration > 0 && path_attr.role.is_first_internal_perimeter()) {
             acceleration = m_config.first_internal_perimeter_acceleration.value;
-        } else if (m_config.second_internal_perimeter_acceleration > 0 && path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
+        } else if (m_config.second_internal_perimeter_acceleration > 0 && path_attr.role.is_second_internal_perimeter()) {
             acceleration = m_config.second_internal_perimeter_acceleration.value;
         } else if (m_config.perimeter_acceleration.value > 0 && path_attr.role.is_perimeter()) {
             acceleration = m_config.perimeter_acceleration.value;
@@ -3564,11 +3581,17 @@ std::string GCodeGenerator::_extrude(
         // m_layer_index > 0 is already guaranteed above, so this is always the steady-state
         // per-extruder temperature -- no need for the first-layer branch that guard makes unreachable.
         const int base_temp   = m_config.temperature.get_at(m_writer.extruder()->id());
-        const int target_temp = std::max(0, base_temp + offset);
-
-        if (m_temperature_manager.needs_temperature_change(target_temp, m_config.temperature_change_threshold.value)) {
-            gcode += m_writer.set_temperature(static_cast<unsigned int>(target_temp), m_config.temperature_wait_for_region_change);
-            m_temperature_manager.note_temperature_set(target_temp);
+        // base_temp == 0 means temperature control is disabled for this extruder.
+        // Do not emit a spurious M104/M109 in that case.
+        if (base_temp > 0) {
+            const int target_temp = std::max(0, base_temp + offset);
+            if (m_temperature_manager.needs_temperature_change(target_temp, m_config.temperature_change_threshold.value)) {
+                const std::string temp_gcode = m_writer.set_temperature(static_cast<unsigned int>(target_temp), m_config.temperature_wait_for_region_change);
+                if (!temp_gcode.empty()) {
+                    gcode += temp_gcode;
+                    m_temperature_manager.note_temperature_set(target_temp);
+                }
+            }
         }
     }
 
