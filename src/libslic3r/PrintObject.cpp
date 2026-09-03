@@ -740,11 +740,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "top_one_perimeter_type"
             || opt_key == "only_one_perimeter_first_layer"
             || opt_key == "external_perimeter_every_layers"
-            || opt_key == "external_perimeter_combine"
             || opt_key == "first_internal_perimeter_every_layers"
-            || opt_key == "first_internal_perimeter_combine"
-            || opt_key == "second_internal_perimeter_every_layers"
-            || opt_key == "second_internal_perimeter_combine") {
+            || opt_key == "second_internal_perimeter_every_layers") {
             steps.emplace_back(posPerimeters);
         } else if (
                opt_key == "gap_fill_enabled"
@@ -3274,7 +3271,6 @@ void PrintObject::combine_perimeters()
     struct RoleSpec {
         ExtrusionRole role;
         int           every_layers;
-        bool          combine;
     };
 
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
@@ -3290,9 +3286,9 @@ void PrintObject::combine_perimeters()
         const double max_combine_h = nozzle_d;
 
         const std::array<RoleSpec, 3> specs = {{
-            { ExtrusionRole::ExternalPerimeter,       cfg.external_perimeter_every_layers.value,       cfg.external_perimeter_combine.value       },
-            { ExtrusionRole::FirstInternalPerimeter,  cfg.first_internal_perimeter_every_layers.value,  cfg.first_internal_perimeter_combine.value  },
-            { ExtrusionRole::SecondInternalPerimeter, cfg.second_internal_perimeter_every_layers.value, cfg.second_internal_perimeter_combine.value },
+            { ExtrusionRole::ExternalPerimeter,       cfg.external_perimeter_every_layers.value       },
+            { ExtrusionRole::FirstInternalPerimeter,  cfg.first_internal_perimeter_every_layers.value  },
+            { ExtrusionRole::SecondInternalPerimeter, cfg.second_internal_perimeter_every_layers.value },
         }};
 
         for (const RoleSpec &spec : specs) {
@@ -3361,21 +3357,13 @@ void PrintObject::combine_perimeters()
                         continue;
                 }
 
-                // Skip regions where layer-region merging has redirected perimeters
-                // into another region.  Merged non-config regions have an empty
-                // m_perimeters.entities vector; operating on them produces empty walk
-                // iterations that corrupt the top layer's flow attributes.
-                {
-                    bool region_has_perimeters = false;
-                    for (size_t i = group_start; i <= top_idx; ++i) {
-                        if (!m_layers[i]->m_regions[region_id]->m_perimeters.entities.empty()) {
-                            region_has_perimeters = true;
-                            break;
-                        }
-                    }
-                    if (!region_has_perimeters)
-                        continue;
-                }
+                // Only proceed when the group-top layer has perimeters for this region.
+                // If the top layer's region was merged into another region by
+                // has_compatible_layer_regions(), there is no thick replacement to void
+                // toward; lower-layer perimeters would be silently erased with nothing
+                // written in their place.
+                if (m_layers[top_idx]->m_regions[region_id]->m_perimeters.entities.empty())
+                    continue;
 
                 // Sum actual layer heights for correct combined flow (not n * top_height).
                 double H = 0.;
@@ -3408,17 +3396,15 @@ void PrintObject::combine_perimeters()
                 };
 
                 // Scale matching paths on the group-top layer.
-                if (spec.combine) {
-                    walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
-                        if (!role_matches(path.role()))
-                            return;
-                        ExtrusionAttributes a = path.attributes();
-                        a.height     = ch;
-                        a.width      = cw;
-                        a.mm3_per_mm = cmm3;
-                        path.set_attributes(a);
-                    });
-                }
+                walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
+                    if (!role_matches(path.role()))
+                        return;
+                    ExtrusionAttributes a = path.attributes();
+                    a.height     = ch;
+                    a.width      = cw;
+                    a.mm3_per_mm = cmm3;
+                    path.set_attributes(a);
+                });
 
                 // Void matching paths on non-top layers. Clear the polyline so the
                 // path carries no geometry; the role is intentionally preserved so
@@ -3446,6 +3432,11 @@ void PrintObject::combine_perimeters()
                                     std::remove_if(loop->paths.begin(), loop->paths.end(),
                                         [](const ExtrusionPath &p) { return p.polyline.empty(); }),
                                     loop->paths.end());
+                            } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
+                                mpath->paths.erase(
+                                    std::remove_if(mpath->paths.begin(), mpath->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    mpath->paths.end());
                             }
                         }
                     }
