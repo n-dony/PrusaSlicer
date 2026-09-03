@@ -206,6 +206,7 @@ public:
     double length() const override;
    
     const ExtrusionAttributes&  attributes() const { return m_attributes; }
+    void                        set_attributes(const ExtrusionAttributes &a) { m_attributes = a; }
     ExtrusionRole               role() const override { return m_attributes.role; }
     float                       width() const { return m_attributes.width; }
     float                       height() const { return m_attributes.height; }
