@@ -788,6 +788,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(60));
 
+    def = this->add("bridge_anchor_length", coFloat);
+    def->label = L("Bridge anchor length");
+    def->category = L("Advanced");
+    def->tooltip = L("[Experimental] Extend bridge infill endpoints by this length into the adjacent "
+                     "perimeter to improve adhesion at bridge start/end points. The bridge "
+                     "overprints the perimeter by this amount; set to 0 to disable.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("over_bridge_speed", coFloatOrPercent);
     // TRN: Label for speed used to print infill above bridges.
     def->label = L("Over bridges");

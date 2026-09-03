@@ -613,6 +613,27 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                         && obj_cfg.two_pass_bridge.value
                         && obj_cfg.bridge_pass_count.value >= 2;
 
+                    // Extend bridge endpoints into the adjacent perimeter for better anchoring.
+                    if (surface_fill.surface.is_bridge()) {
+                        const double anchor_len = scale_(layerm.region().config().bridge_anchor_length.value);
+                        if (anchor_len > 0.) {
+                            for (Polyline &pl : polylines) {
+                                if (pl.points.size() >= 2) {
+                                    // Extend the front point away from the second point
+                                    Vec2d dir_f = (pl.points.front() - pl.points[1]).cast<double>();
+                                    const double len_f = dir_f.norm();
+                                    if (len_f > 0.)
+                                        pl.points.front() = (pl.points.front().cast<double>() + dir_f / len_f * anchor_len).cast<coord_t>();
+                                    // Extend the back point away from the second-to-last point
+                                    Vec2d dir_b = (pl.points.back() - pl.points[pl.points.size() - 2]).cast<double>();
+                                    const double len_b = dir_b.norm();
+                                    if (len_b > 0.)
+                                        pl.points.back() = (pl.points.back().cast<double>() + dir_b / len_b * anchor_len).cast<coord_t>();
+                                }
+                            }
+                        }
+                    }
+
                     if (do_two_pass) {
                         const int n_passes = std::clamp(obj_cfg.bridge_pass_count.value, 2, 8);
                         const float pass_height = surface_fill.params.flow.height() / float(n_passes);
