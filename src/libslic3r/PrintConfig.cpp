@@ -3955,6 +3955,25 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("two_pass_bridge", coBool);
+    def->label = L("Two-pass bridge");
+    def->category = L("Infill");
+    def->tooltip = L("Print bridge infill in two passes: a thin first pass at reduced "
+                      "flow to anchor the bridge, then a thicker second pass for the "
+                      "load-bearing fill. Requires bridge_pass_count >= 2.");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("bridge_pass_count", coInt);
+    def->label = L("Bridge pass count");
+    def->category = L("Infill");
+    def->tooltip = L("Number of passes for two-pass bridge infill. Each pass receives "
+                      "an equal share of the total bridge height. Default 2.");
+    def->min = 2;
+    def->max = 8;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
+
     def = this->add("thin_walls", coBool);
     def->label = L("Detect thin walls");
     def->category = L("Layers and Perimeters");
