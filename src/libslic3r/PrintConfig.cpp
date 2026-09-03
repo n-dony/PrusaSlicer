@@ -3957,18 +3957,19 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("two_pass_bridge", coBool);
     def->label = L("Two-pass bridge");
-    def->category = L("Infill");
-    def->tooltip = L("Print bridge infill in two passes: a thin first pass at reduced "
-                      "flow to anchor the bridge, then a thicker second pass for the "
-                      "load-bearing fill. Requires bridge_pass_count >= 2.");
-    def->mode = comSimple;
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Print bridge infill in multiple passes. Each pass deposits an equal "
+                      "share of the total bridge height, allowing early passes to firm up "
+                      "before later passes land on them.");
+    def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("bridge_pass_count", coInt);
     def->label = L("Bridge pass count");
-    def->category = L("Infill");
-    def->tooltip = L("Number of passes for two-pass bridge infill. Each pass receives "
-                      "an equal share of the total bridge height. Default 2.");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Number of passes for two-pass bridge infill (two_pass_bridge must be enabled). "
+                      "Each pass receives an equal share of the total bridge height.");
+    def->sidetext = L("passes");
     def->min = 2;
     def->max = 8;
     def->mode = comAdvanced;
