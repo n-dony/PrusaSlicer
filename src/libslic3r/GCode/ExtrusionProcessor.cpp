@@ -26,6 +26,9 @@ ExtrusionPaths calculate_and_split_overhanging_extrusions(const ExtrusionPath   
         path.polyline.points, unscaled_prev_layer, config
     );
 
+    if (extended_points.empty())
+        return {};
+
     std::vector<std::pair<float, float>> calculated_distances(extended_points.size());
 
     for (size_t i = 0; i < extended_points.size(); i++) {
