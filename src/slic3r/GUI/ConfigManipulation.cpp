@@ -320,7 +320,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
         toggle_field(el, has_solid_infill);
 
     for (auto el : { "fill_angle", "bridge_angle", "infill_extrusion_width",
-                    "infill_speed", "bridge_speed", "over_bridge_speed" })
+                    "infill_speed", "bridge_speed", "bridge_anchor_length", "over_bridge_speed" })
         toggle_field(el, have_infill || has_solid_infill);
 
     toggle_field("bridge_pass_count", config->opt_bool("two_pass_bridge"));
