@@ -601,19 +601,24 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 
                     thick_polylines.clear();
                 } else {
-                    const PrintRegionConfig &region_cfg = layerm.region().config();
+                    const PrintObjectConfig &obj_cfg = layerm.layer()->object()->config();
                     // TODO(two_pass_bridge): pass_index is set here. Global dwell-time batching
                     // (all pass-0 before all pass-1 across the layer) requires reordering in
                     // get_normal_extrusions() (ExtrusionOrder.cpp) before path smoothing —
                     // deferred to a follow-on commit.
                     const bool do_two_pass = surface_fill.surface.is_bridge()
-                        && region_cfg.two_pass_bridge.value
-                        && region_cfg.bridge_pass_count.value >= 2;
+                        && obj_cfg.two_pass_bridge.value
+                        && obj_cfg.bridge_pass_count.value >= 2;
 
                     if (do_two_pass) {
-                        const int n_passes = region_cfg.bridge_pass_count.value;
+                        const int n_passes = std::clamp(obj_cfg.bridge_pass_count.value, 2, 8);
                         const float pass_height = surface_fill.params.flow.height() / float(n_passes);
                         const double pass_mm3   = flow_mm3_per_mm / double(n_passes);
+
+                        // Parent collection preserves pass order — the path chainer must not reorder passes.
+                        ExtrusionEntityCollection *parent_eec = eec;  // reuse the already-allocated collection
+                        parent_eec->no_sort = true;
+                        // eec->entities will hold child EECs (one per pass), not paths directly.
 
                         for (int pass = 0; pass < n_passes; ++pass) {
                             ExtrusionAttributes attrs{
@@ -626,22 +631,18 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 
                             Polylines pass_polylines;
                             if (pass < n_passes - 1)
-                                pass_polylines = polylines;          // copy — original stays for later passes
+                                pass_polylines = polylines;
                             else
-                                pass_polylines = std::move(polylines); // last pass: move
+                                pass_polylines = std::move(polylines);
 
-                            ExtrusionEntityCollection *pass_eec;
-                            if (pass == 0) {
-                                pass_eec = eec;  // reuse the already-allocated collection
-                            } else {
-                                pass_eec = new ExtrusionEntityCollection();
-                                pass_eec->no_sort = f->no_sort();
-                            }
+                            ExtrusionEntityCollection *pass_eec = new ExtrusionEntityCollection();
+                            pass_eec->no_sort = f->no_sort();
                             extrusion_entities_append_paths(
                                 pass_eec->entities, std::move(pass_polylines),
                                 attrs, !params.prefer_clockwise_movements);
-                            layerm.m_fills.entities.push_back(pass_eec);
+                            parent_eec->entities.push_back(pass_eec);  // child inside parent
                         }
+                        layerm.m_fills.entities.push_back(parent_eec);  // push parent only once
                     } else {
                         // When prefer_clockwise_movements is true, we have to ensure that extrusion paths will not be reversed during path planning.
                         extrusion_entities_append_paths(
