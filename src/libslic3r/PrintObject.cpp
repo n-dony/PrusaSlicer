@@ -3431,6 +3431,25 @@ void PrintObject::combine_perimeters()
                         path.polyline = Polyline{};
                     });
                 }
+
+                // Remove empty-polyline paths from loops on voided layers so
+                // downstream geometry consumers (calculate_overhanging_perimeters,
+                // pressure equalizer, etc.) never encounter zero-point paths.
+                for (size_t i = group_start; i < top_idx; ++i) {
+                    LayerRegion *rm = m_layers[i]->m_regions[region_id];
+                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                        auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
+                        if (!island) continue;
+                        for (ExtrusionEntity *child : island->entities) {
+                            if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
+                                loop->paths.erase(
+                                    std::remove_if(loop->paths.begin(), loop->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    loop->paths.end());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
