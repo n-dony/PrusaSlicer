@@ -167,7 +167,8 @@ inline bool operator==(const ExtrusionAttributes &lhs, const ExtrusionAttributes
 {
     return static_cast<const ExtrusionFlow&>(lhs) == static_cast<const ExtrusionFlow&>(rhs) &&
            lhs.role == rhs.role && lhs.overhang_attributes == rhs.overhang_attributes &&
-           lhs.perimeter_index == rhs.perimeter_index && lhs.pass_index == rhs.pass_index;
+           lhs.perimeter_index == rhs.perimeter_index && lhs.pass_index == rhs.pass_index &&
+           lhs.pass_count == rhs.pass_count;
 }
 
 class ExtrusionPath : public ExtrusionEntity

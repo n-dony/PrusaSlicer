@@ -3500,8 +3500,8 @@ std::string GCodeGenerator::_extrude(
         comment += description;
         comment += description_bridge;
         comment += " point";
-        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z))};
-        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + (path.front().height_fraction - 1.0) * path_attr.height))};
+        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z + m_bridge_pass_z_offset))};
+        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + m_bridge_pass_z_offset + (path.front().height_fraction - 1.0) * path_attr.height))};
         const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
             return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
         })};
