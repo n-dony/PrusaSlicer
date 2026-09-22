@@ -278,6 +278,17 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
             apply(config, &(*new_config));
         }
     }
+
+    if (config->opt_bool("high_def_print")) {
+        DynamicPrintConfig new_conf = *config;
+        new_conf.set_key_value("perimeters", new ConfigOptionInt(std::max(config->opt_int("perimeters"), 3)));
+        new_conf.set_key_value("swap_first_int_w_ext_perimeter", new ConfigOptionBool(true));
+        new_conf.set_key_value("first_internal_perimeter_every_layers", new ConfigOptionInt(2));
+        new_conf.set_key_value("second_internal_perimeter_every_layers", new ConfigOptionInt(2));
+        new_conf.set_key_value("infill_every_layers", new ConfigOptionInt(2));
+        new_conf.set_key_value("scarf_seam_placement", new ConfigOptionEnum<ScarfSeamPlacement>(ScarfSeamPlacement::countours));
+        apply(config, &new_conf);
+    }
 }
 
 void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)

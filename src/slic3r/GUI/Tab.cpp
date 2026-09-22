@@ -1492,6 +1492,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("scarf_seam_max_segment_length", scarf_seam_path + "max-scarf-joint-segment-length");
         optgroup->append_single_option_line("scarf_seam_on_inner_perimeters", scarf_seam_path + "scarf-joint-on-inner-perimeters");
 
+        optgroup->append_single_option_line("high_def_print");
         optgroup->append_single_option_line("swap_first_int_w_ext_perimeter", category_path + "swap-first-internal-with-external-perimeter");
         optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse-internal-perimeters");
         optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse-internal-perimeters-at");
