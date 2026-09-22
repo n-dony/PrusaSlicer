@@ -2750,6 +2750,7 @@ LayerResult GCodeGenerator::process_layer(
 
     gcode += this->change_layer(previous_layer_z, print_z, result.spiral_vase_enable, first_point.head<2>(), first_layer); // this will increase m_layer_index
     m_layer = &layer;
+    m_bridge_pass_z_offset = 0.; // discard bridge-pass Z offset from previous layer
     if (this->line_distancer_is_required(layer_tools.extruders) && this->m_layer != nullptr && this->m_layer->lower_layer != nullptr)
         m_travel_obstacle_tracker.init_layer(layer, layers);
 
@@ -3471,6 +3472,20 @@ std::string GCodeGenerator::_extrude(
     const bool has_active_instance{m_label_objects.has_active_instance()};
     if (m_writer.multiple_extruders && has_active_instance) {
         gcode += m_label_objects.maybe_change_instance(m_writer);
+    }
+
+    // Two-pass bridge: shift nozzle Z so each sub-pass occupies its own vertical slice.
+    if (path_attr.pass_index.has_value() && path_attr.pass_count.has_value()) {
+        const double z_adj = -double(int(*path_attr.pass_count) - 1 - int(*path_attr.pass_index))
+                             * double(path_attr.height);
+        if (std::abs(z_adj - m_bridge_pass_z_offset) > EPSILON) {
+            m_bridge_pass_z_offset = z_adj;
+            gcode += m_writer.travel_to_z(m_layer->print_z + z_adj, "bridge pass Z");
+        }
+    } else if (std::abs(m_bridge_pass_z_offset) > EPSILON) {
+        // Leaving bridge passes — restore Z to normal layer Z.
+        m_bridge_pass_z_offset = 0.;
+        gcode += m_writer.travel_to_z(m_layer->print_z, "restore Z after bridge passes");
     }
 
     if (!this->last_position) {

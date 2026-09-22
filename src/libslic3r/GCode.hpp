@@ -431,6 +431,9 @@ private:
     unsigned int                        m_layer_count;
     // Progress bar indicator. Increments from -1 up to layer_count.
     int                                 m_layer_index;
+    // Active Z offset applied for the current bridge pass so successive passes stack
+    // physically. Zero means no offset is active (normal extrusion or last pass).
+    double                              m_bridge_pass_z_offset = 0.;
     // Whether the object layer being processed is the topmost layer of its PrintObject.
     // Same granularity as the existing m_config.apply(layer.object()->config()) call in process_layer:
     // reflects the first object_layer found for this Z, not every instance/object sharing that Z.
