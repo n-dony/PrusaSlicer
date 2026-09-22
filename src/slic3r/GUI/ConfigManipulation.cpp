@@ -285,11 +285,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     bool have_perimeters = config->opt_int("perimeters") > 0;
     for (auto el : { "extra_perimeters","extra_perimeters_on_overhangs", "thin_walls", "overhangs",
                     "seam_position","staggered_inner_seams", "external_perimeters_first",
-                    "swap_first_int_w_ext_perimeter", "reverse_internal_perimeters", "reverse_internal_perimeters_at",
+                    "swap_first_int_w_ext_perimeter", "reverse_internal_perimeters",
                     "external_perimeter_extrusion_width",
                     "perimeter_speed", "small_perimeter_speed", "first_internal_perimeter_speed",
                     "second_internal_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
         toggle_field(el, have_perimeters);
+    toggle_field("reverse_internal_perimeters_at", have_perimeters && config->opt_bool("reverse_internal_perimeters"));
 
     for (size_t i = 0; i < 4; i++) {
         toggle_field("overhang_speed_" + std::to_string(i), config->opt_bool("enable_dynamic_overhang_speeds"));

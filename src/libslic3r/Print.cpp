@@ -208,10 +208,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "bridge_temperature_offset",
         "overhang_perimeter_temperature_offset",
         "gap_fill_temperature_offset",
-        // Multi-pass bridge options (fork additions) — present in config but machinery not implemented;
-        // map to psGCodeExport so a config change does not silently reuse stale G-code.
-        "two_pass_bridge",
-        "bridge_pass_count"
+        "ironing_temperature_offset"
     };
 
     static std::unordered_set<std::string> steps_ignore;
