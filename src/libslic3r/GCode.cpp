@@ -3489,7 +3489,7 @@ std::string GCodeGenerator::_extrude(
     }
 
     if (!this->last_position) {
-        const double z = this->m_last_layer_z;
+        const double z = this->m_last_layer_z + m_bridge_pass_z_offset;
         const std::string comment{"move to print after unknown position"};
         gcode += this->retract_and_wipe();
         gcode += m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
