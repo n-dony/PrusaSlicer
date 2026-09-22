@@ -701,13 +701,13 @@ SCENARIO("Fork: perimeter role assignment for new roles in classic mode", "[Peri
 
 SCENARIO("Fork: external_perimeter_every_layers combine smoke test", "[Perimeters]")
 {
-    // Smoke test: external_perimeter_combine + external_perimeter_every_layers
-    // must slice a simple cube without crashing.  Non-empty G-code is the
-    // primary correctness criterion.
+    // Smoke test: external_perimeter_every_layers=2 with layer_height=0.15
+    // (two 0.15mm layers fit under the 0.4mm nozzle cap so combining fires).
+    // Non-empty G-code without crash is the primary correctness criterion.
     auto config = Slic3r::DynamicPrintConfig::full_print_config_with({
         { "skirts",                          0 },
         { "perimeters",                      3 },
-        { "external_perimeter_combine",      true },
+        { "layer_height",                    0.15 },
         { "external_perimeter_every_layers", 2 },
         { "cooling",                         "0" },
         { "first_layer_speed",               "100%" }
