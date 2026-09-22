@@ -157,18 +157,15 @@ struct ExtrusionAttributes : ExtrusionFlow
     // Set only for external and internal perimeters. The external perimeter has value 0, the first internal perimeter has 1, and so on.
     std::optional<uint16_t> perimeter_index;
     // Set for bridge extrusions when two_pass_bridge is enabled. pass_index is
-    // 0-based (0 = thin first pass, 1 = thicker second pass …).
-    // pass_count is the total number of passes (bridge_pass_count config value).
+    // 0-based (0 = foundation pass, 1 = final pass).
     std::optional<uint16_t> pass_index;
-    std::optional<uint16_t> pass_count;
 };
 
 inline bool operator==(const ExtrusionAttributes &lhs, const ExtrusionAttributes &rhs)
 {
     return static_cast<const ExtrusionFlow&>(lhs) == static_cast<const ExtrusionFlow&>(rhs) &&
            lhs.role == rhs.role && lhs.overhang_attributes == rhs.overhang_attributes &&
-           lhs.perimeter_index == rhs.perimeter_index && lhs.pass_index == rhs.pass_index &&
-           lhs.pass_count == rhs.pass_count;
+           lhs.perimeter_index == rhs.perimeter_index && lhs.pass_index == rhs.pass_index;
 }
 
 class ExtrusionPath : public ExtrusionEntity

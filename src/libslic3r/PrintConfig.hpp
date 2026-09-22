@@ -730,7 +730,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     // The rest
     ((ConfigOptionBool,                thick_bridges))
     ((ConfigOptionBool,                two_pass_bridge))
-    ((ConfigOptionInt,                 bridge_pass_count))
     ((ConfigOptionFloat,               xy_size_compensation))
     ((ConfigOptionBool,                wipe_into_objects))
 

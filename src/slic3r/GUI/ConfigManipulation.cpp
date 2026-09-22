@@ -324,7 +324,6 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
                     "infill_speed", "bridge_speed", "bridge_anchor_length", "over_bridge_speed" })
         toggle_field(el, have_infill || has_solid_infill);
 
-    toggle_field("bridge_pass_count", config->opt_bool("two_pass_bridge"));
     toggle_field("external_perimeter_every_layers",       have_perimeters);
     toggle_field("first_internal_perimeter_every_layers", have_perimeters);
     toggle_field("second_internal_perimeter_every_layers", have_perimeters);

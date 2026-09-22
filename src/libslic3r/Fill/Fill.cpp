@@ -610,8 +610,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     // get_normal_extrusions() (ExtrusionOrder.cpp) before path smoothing —
                     // deferred to a follow-on commit.
                     const bool do_two_pass = surface_fill.surface.is_bridge()
-                        && obj_cfg.two_pass_bridge.value
-                        && obj_cfg.bridge_pass_count.value >= 2;
+                        && obj_cfg.two_pass_bridge.value;
 
                     // Extend bridge endpoints into the adjacent perimeter for better anchoring.
                     if (surface_fill.surface.is_bridge()) {
@@ -635,35 +634,34 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     }
 
                     if (do_two_pass) {
-                        const int n_passes = std::clamp(obj_cfg.bridge_pass_count.value, 2, 8);
-                        const float pass_height = surface_fill.params.flow.height() / float(n_passes);
-                        const double pass_mm3   = flow_mm3_per_mm / double(n_passes);
+                        const float pass_height = surface_fill.params.flow.height() * 0.5f;
+                        const double pass_mm3   = flow_mm3_per_mm * 0.5;
 
-                        // C-1 fix: use a single flat EEC — all passes' paths go directly into
-                        // eec->entities with no inner EEC per pass. no_sort=true preserves pass
-                        // order so the path chainer cannot interleave passes. The previous
-                        // two-level structure (parent_eec -> pass_eec -> paths) caused all bridge
-                        // infill to be silently dropped by SmoothPathGenerator, which has no EEC
-                        // branch and therefore cannot recurse into child collections.
+                        // no_sort=true preserves pass order so the path chainer cannot interleave passes.
                         eec->no_sort = true;
 
-                        for (int pass = 0; pass < n_passes; ++pass) {
+                        // Foundation pass (index 0) — copy polylines
+                        {
                             ExtrusionAttributes attrs{
                                 surface_fill.params.extrusion_role,
                                 ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
                                 f->is_self_crossing()
                             };
-                            attrs.pass_index = uint16_t(pass);
-                            attrs.pass_count = uint16_t(n_passes);
-
-                            Polylines pass_polylines;
-                            if (pass < n_passes - 1)
-                                pass_polylines = polylines;
-                            else
-                                pass_polylines = std::move(polylines);
-
+                            attrs.pass_index = uint16_t(0);
                             extrusion_entities_append_paths(
-                                eec->entities, std::move(pass_polylines),
+                                eec->entities, Polylines{polylines},
+                                attrs, !params.prefer_clockwise_movements);
+                        }
+                        // Final pass (index 1) — move polylines
+                        {
+                            ExtrusionAttributes attrs{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
+                                f->is_self_crossing()
+                            };
+                            attrs.pass_index = uint16_t(1);
+                            extrusion_entities_append_paths(
+                                eec->entities, std::move(polylines),
                                 attrs, !params.prefer_clockwise_movements);
                         }
                         layerm.m_fills.entities.push_back(eec);

@@ -4004,17 +4004,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("bridge_pass_count", coInt);
-    def->label = L("Bridge pass count");
-    def->category = L("Layers and Perimeters");
-    def->tooltip = L("Number of passes for two-pass bridge infill (two_pass_bridge must be enabled). "
-                      "Each pass receives an equal share of the total bridge height.");
-    def->sidetext = L("passes");
-    def->min = 2;
-    def->max = 8;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(2));
-
     def = this->add("thin_walls", coBool);
     def->label = L("Detect thin walls");
     def->category = L("Layers and Perimeters");
