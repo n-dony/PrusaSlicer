@@ -216,33 +216,17 @@ static void apply_perimeter_ordering_classic(
             }
         }
 
-        // "Groove injection": print the first internal perimeter out of its natural slot so it is
-        // extruded right against the external perimeter. Contour groups run inside-out, so
-        // depth==1 is moved to the back (printed last, right after depth==0); hole groups run
-        // outside-in, so depth==1 is moved to the front (printed first, right before depth==0).
-        const bool group_is_hole = static_cast<const ExtrusionLoop *>(
-            collection.entities[positions[0]])->is_clockwise();
-
         if (swap_first_int_w_ext_perimeter) {
             std::vector<ExtrusionEntity *> reordered;
             reordered.reserve(loops.size());
-            if (group_is_hole) {
-                // Holes print outside-in; depth==1 is already last → move to front
-                for (size_t k = 0; k < loops.size(); ++k)
-                    if (depths[k] == 1)
-                        reordered.emplace_back(loops[k]);
-                for (size_t k = 0; k < loops.size(); ++k)
-                    if (depths[k] != 1)
-                        reordered.emplace_back(loops[k]);
-            } else {
-                // Contours print inside-out; depth==1 is already first → move to back
-                for (size_t k = 0; k < loops.size(); ++k)
-                    if (depths[k] != 1)
-                        reordered.emplace_back(loops[k]);
-                for (size_t k = 0; k < loops.size(); ++k)
-                    if (depths[k] == 1)
-                        reordered.emplace_back(loops[k]);
-            }
+            // Move depth==1 to end so it prints last in the group, bonding against
+            // the already-set external perimeter. Consistent with Arachne mode.
+            for (size_t k = 0; k < loops.size(); ++k)
+                if (depths[k] != 1)
+                    reordered.emplace_back(loops[k]);
+            for (size_t k = 0; k < loops.size(); ++k)
+                if (depths[k] == 1)
+                    reordered.emplace_back(loops[k]);
             loops = std::move(reordered);
         }
 

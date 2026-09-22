@@ -793,7 +793,8 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Speed");
     def->tooltip = L("[Experimental] Extend bridge infill endpoints by this length into the adjacent "
                      "perimeter to improve adhesion at bridge start/end points. The bridge "
-                     "overprints the perimeter by this amount; set to 0 to disable.");
+                     "overprints the perimeter by this amount; set to 0 to disable."
+                     " Not clipped against model boundaries — keep small near narrow perimeters.");
     def->sidetext = L("mm");
     def->min = 0;
     def->mode = comAdvanced;

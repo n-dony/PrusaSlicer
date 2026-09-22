@@ -3285,10 +3285,11 @@ void PrintObject::combine_perimeters()
             cfg.perimeter_extruder.value - 1);
         const double max_combine_h = nozzle_d;
 
-        const std::array<RoleSpec, 3> specs = {{
-            { ExtrusionRole::ExternalPerimeter,       cfg.external_perimeter_every_layers.value       },
+        const std::array<RoleSpec, 2> specs = {{
             { ExtrusionRole::FirstInternalPerimeter,  cfg.first_internal_perimeter_every_layers.value  },
             { ExtrusionRole::SecondInternalPerimeter, cfg.second_internal_perimeter_every_layers.value },
+            // ExternalPerimeter is intentionally excluded: voiding the outer wall on sub-layers
+            // has no lateral confinement and risks structural wall gaps.
         }};
 
         for (const RoleSpec &spec : specs) {
@@ -3297,15 +3298,13 @@ void PrintObject::combine_perimeters()
 
             // Map ExtrusionRole -> FlowRole for LayerRegion::flow().
             const FlowRole flow_role =
-                (spec.role == ExtrusionRole::ExternalPerimeter)       ? frExternalPerimeter :
-                (spec.role == ExtrusionRole::FirstInternalPerimeter)  ? frFirstInternalPerimeter :
-                                                                        frSecondInternalPerimeter;
+                (spec.role == ExtrusionRole::FirstInternalPerimeter) ? frFirstInternalPerimeter :
+                                                                       frSecondInternalPerimeter;
 
-            // Bitmask-safe role predicate (catches OverhangPerimeter variants too).
+            // Bitmask-safe role predicate (catches OverhangPerimeter variants too). Bridges excluded.
             auto role_matches = [&](ExtrusionRole r) -> bool {
-                if (spec.role == ExtrusionRole::ExternalPerimeter)       return r.is_external_perimeter();
-                if (spec.role == ExtrusionRole::FirstInternalPerimeter)  return r.is_first_internal_perimeter();
-                return r.is_second_internal_perimeter();
+                if (spec.role == ExtrusionRole::FirstInternalPerimeter)  return r.is_first_internal_perimeter() && !r.is_bridge();
+                return r.is_second_internal_perimeter() && !r.is_bridge();
             };
 
             // Stage 1: height-based grouping (mirrors combine_infill stage 1).
