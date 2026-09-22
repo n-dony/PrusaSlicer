@@ -790,7 +790,7 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("bridge_anchor_length", coFloat);
     def->label = L("Bridge anchor length");
-    def->category = L("Advanced");
+    def->category = L("Speed");
     def->tooltip = L("[Experimental] Extend bridge infill endpoints by this length into the adjacent "
                      "perimeter to improve adhesion at bridge start/end points. The bridge "
                      "overprints the perimeter by this amount; set to 0 to disable.");
