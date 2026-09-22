@@ -2222,9 +2222,9 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionInt(1));
 
     def = this->add("second_internal_perimeter_every_layers", coInt);
-    def->label = L("Second internal perimeter every N layers");
+    def->label = L("2nd+ internal perimeters every N layers");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print second internal perimeters only every N layers. Default 1 (every layer).");
+    def->tooltip = L("Print second and all deeper internal perimeters (depth ≥ 2) only every N layers. Default 1 (every layer).");
     def->sidetext = L("layers");
     def->min = 1;
     def->mode = comAdvanced;
