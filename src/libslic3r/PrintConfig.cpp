@@ -2140,6 +2140,12 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(0));
 
+    def = this->add("high_def_print", coBool);
+    def->label = L("High definition print");
+    def->tooltip = L("Enables a quality preset: 3+ perimeters, swap first-internal with external order, combine internal perimeters and infill every 2 layers, and scarf seam on contours.");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("infill_acceleration", coFloat);
     def->label = L("Infill");
     def->tooltip = L("This is the acceleration your printer will use for infill. Set zero to disable "
