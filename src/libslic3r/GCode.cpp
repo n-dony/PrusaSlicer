@@ -3021,6 +3021,21 @@ std::string GCodeGenerator::extrude_slices(
         print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
 
     std::string gcode;
+    // Bridge foundation pre-pass: print all pass_index==0 fill paths before any perimeters.
+    for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
+        for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
+            for (const InfillRange &infill_range : island_extrusions.infill_ranges) {
+                if (infill_range.items.empty())
+                    continue;
+                this->m_config.apply(infill_range.region->config());
+                for (const GCode::SmoothPath &path : infill_range.items) {
+                    if (!path.empty() && path.front().path_attributes.pass_index.has_value()
+                            && *path.front().path_attributes.pass_index == 0)
+                        gcode += this->extrude_smooth_path(path, false, "infill", -1.0);
+                }
+            }
+        }
+    }
     for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
         for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
             if (island_extrusions.infill_first) {
@@ -3254,6 +3269,9 @@ std::string GCodeGenerator::extrude_infill_ranges(
         if (!infill_range.items.empty()) {
             this->m_config.apply(infill_range.region->config());
             for (const GCode::SmoothPath &path : infill_range.items) {
+                if (!path.empty() && path.front().path_attributes.pass_index.has_value()
+                        && *path.front().path_attributes.pass_index == 0)
+                    continue; // already printed in bridge foundation pre-pass
                 gcode += this->extrude_smooth_path(path, false, comment, -1.0);
             }
         }
@@ -3475,9 +3493,8 @@ std::string GCodeGenerator::_extrude(
     }
 
     // Two-pass bridge: shift nozzle Z so each sub-pass occupies its own vertical slice.
-    if (path_attr.pass_index.has_value() && path_attr.pass_count.has_value()) {
-        const double z_adj = -double(int(*path_attr.pass_count) - 1 - int(*path_attr.pass_index))
-                             * double(path_attr.height);
+    if (path_attr.pass_index.has_value()) {
+        const double z_adj = (*path_attr.pass_index == 0) ? -double(path_attr.height) : 0.;
         if (std::abs(z_adj - m_bridge_pass_z_offset) > EPSILON) {
             m_bridge_pass_z_offset = z_adj;
             gcode += m_writer.travel_to_z(m_layer->print_z + z_adj, "bridge pass Z");
