@@ -1151,18 +1151,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(50, true));
 
-    def = this->add("first_internal_perimeter_speed", coFloatOrPercent);
+    def = this->add("first_internal_perimeter_speed", coFloat);
     def->label = L("First internal perimeters");
     def->category = L("Speed");
     def->tooltip = L("This separate setting will affect the speed of the first internal perimeter, "
                    "the one printed right next to the external perimeter. "
-                   "If expressed as percentage (for example: 80%) it will be calculated "
-                   "on the perimeters speed setting above. Set to zero for auto.");
-    def->sidetext = L("mm/s or %");
-    def->ratio_over = "perimeter_speed";
+                   "Set to zero to use the perimeter speed.");
+    def->sidetext = L("mm/s");
     def->min = 0;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("first_internal_perimeter_acceleration", coFloat);
     def->label = L("First internal perimeters");
@@ -1172,18 +1170,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0));
 
-    def = this->add("second_internal_perimeter_speed", coFloatOrPercent);
+    def = this->add("second_internal_perimeter_speed", coFloat);
     def->label = L("Second internal perimeters");
     def->category = L("Speed");
     def->tooltip = L("This separate setting will affect the speed of the second internal perimeter, "
                    "counted inward from the external perimeter. "
-                   "If expressed as percentage (for example: 80%) it will be calculated "
-                   "on the perimeters speed setting above. Set to zero for auto.");
-    def->sidetext = L("mm/s or %");
-    def->ratio_over = "perimeter_speed";
+                   "Set to zero to use the perimeter speed.");
+    def->sidetext = L("mm/s");
     def->min = 0;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("second_internal_perimeter_acceleration", coFloat);
     def->label = L("Second internal perimeters");
@@ -1863,17 +1859,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("temperature_offset_layers", coEnum);
-    def->label = L("Apply temperature offsets to");
+    def = this->add("temperature_offset_layers", coInt);
+    def->label = L("Temperature offset skip layers");
     def->category = L("Temperature");
-    def->tooltip = L("Control which layers receive temperature offsets. "
-                    "First layer is always excluded.");
+    def->tooltip = L("Number of layers to skip before applying temperature offsets. "
+                    "0 = apply from the first layer.");
+    def->min = 0;
     def->mode = comExpert;
-    def->set_enum<TemperatureOffsetLayers>({
-        { "all",          L("All layers (except first)") },
-        { "skip_topmost", L("Skip topmost layer") },
-    });
-    def->set_default_value(new ConfigOptionEnum<TemperatureOffsetLayers>(TemperatureOffsetLayers::All));
+    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("external_perimeter_temperature_offset", coInt);
     def->label = L("External perimeter");

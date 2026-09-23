@@ -3027,9 +3027,9 @@ void PrintObject::combine_perimeters()
 
         const std::array<RoleSpec, 2> specs = {{
             { ExtrusionRole::FirstInternalPerimeter,
-              region.extruder_config_value<int>("first_internal_perimeter_every_layers",  FlowRole::frPerimeter) },
+              this->print()->config().get<int>("first_internal_perimeter_every_layers") },
             { ExtrusionRole::SecondInternalPerimeter,
-              region.extruder_config_value<int>("second_internal_perimeter_every_layers", FlowRole::frPerimeter) },
+              this->print()->config().get<int>("second_internal_perimeter_every_layers") },
             // ExternalPerimeter is intentionally excluded: voiding the outer wall on sub-layers
             // has no lateral confinement and risks structural wall gaps.
         }};
