@@ -5130,7 +5130,7 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Number of internal perimeters at which to reverse print order.");
     def->units = {L("perimeters")};
-    def->min = 1;
+    def->min = 0;
     def->init_fn = init_with(2);
 
     def = defs.add("high_def_print", typeid(bool));

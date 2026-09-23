@@ -3086,7 +3086,7 @@ std::string GCodeGenerator::extrude_slices(
     // Bridge foundation pre-pass: print all pass_index==0 fill paths before any perimeters.
     // These are the lower "foundation" passes of a two-pass bridge that must cure before the
     // upper fill pass is printed on top of them.
-    if (m_print->config().get<bool>("two_pass_bridge")) {
+    if (print_object.config().get<bool>("two_pass_bridge")) {
         for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
             for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
                 for (const InfillRange &infill_range : island_extrusions.infill_ranges) {
@@ -3558,16 +3558,34 @@ std::string GCodeGenerator::_extrude(
     }
 
     // Two-pass bridge: shift nozzle Z so each sub-pass occupies its own vertical slice.
+    // Fix 1: use m_last_layer_z (real nozzle Z, including z_offset) instead of m_layer->print_z.
+    // Fix 2: defer the downward Z drop until AFTER travel so the nozzle does not drag at
+    //         foundation height when moving to the extrusion start point.
+    // Fix 3: cap the foundation drop to at most 90 % of the current layer height so the
+    //         nozzle does not descend into the previous layer on thin layers.
+    bool deferred_z_drop = false;
+    double deferred_z_offset = m_bridge_pass_z_offset;
+
     if (path_attr.pass_index.has_value()) {
         const double z_adj = (*path_attr.pass_index == 0) ? -double(path_attr.height) : 0.;
-        if (std::abs(z_adj - m_bridge_pass_z_offset) > EPSILON) {
-            m_bridge_pass_z_offset = z_adj;
-            gcode += m_writer.travel_to_z(m_layer->print_z + z_adj, "bridge pass Z");
+        const double layer_height = m_layer->height;
+        const double capped_z_adj = -std::min(-z_adj, layer_height * 0.9);
+        if (std::abs(capped_z_adj - m_bridge_pass_z_offset) > EPSILON) {
+            if (capped_z_adj < m_bridge_pass_z_offset) {
+                // Downward Z move (foundation pass): defer until after travel to avoid
+                // dragging the nozzle across the part at foundation height.
+                deferred_z_drop = true;
+                deferred_z_offset = capped_z_adj;
+            } else {
+                // Upward Z move (transitioning to second pass): raise Z before travel.
+                m_bridge_pass_z_offset = capped_z_adj;
+                gcode += m_writer.travel_to_z(m_last_layer_z + capped_z_adj, "bridge pass Z raise");
+            }
         }
     } else if (std::abs(m_bridge_pass_z_offset) > EPSILON) {
         // Leaving bridge passes — restore Z to normal layer Z.
         m_bridge_pass_z_offset = 0.;
-        gcode += m_writer.travel_to_z(m_layer->print_z, "restore Z after bridge passes");
+        gcode += m_writer.travel_to_z(m_last_layer_z, "restore Z after bridge passes");
     }
 
     if (!this->last_position) {
@@ -3582,12 +3600,21 @@ std::string GCodeGenerator::_extrude(
         comment += description;
         comment += description_bridge;
         comment += " point";
-        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z + m_bridge_pass_z_offset))};
-        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + m_bridge_pass_z_offset + (path.front().height_fraction - 1.0) * path_attr.height))};
+        // Travel at the current Z (before any deferred Z drop) so the nozzle does not drag
+        // across the part at foundation height.
+        const double travel_z_offset = deferred_z_drop ? 0. : m_bridge_pass_z_offset;
+        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z + travel_z_offset))};
+        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + travel_z_offset + (path.front().height_fraction - 1.0) * path_attr.height))};
         const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
             return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
         }, config)};
         gcode += travel_gcode;
+    }
+
+    // Apply deferred Z drop now that the nozzle is at the extrusion start XY position.
+    if (deferred_z_drop) {
+        m_bridge_pass_z_offset = deferred_z_offset;
+        gcode += m_writer.travel_to_z(m_last_layer_z + deferred_z_offset, "bridge foundation pass Z drop");
     }
 
     // compensate retraction
@@ -3692,7 +3719,9 @@ std::string GCodeGenerator::_extrude(
             speed = config.first_layer_solid_infill_speed.at(extruder_id).float_value();
         } else if (path_attr.role == ExtrusionRole::TopSolidInfill) {
             speed = config.first_layer_top_solid_infill_speed.at(extruder_id).float_value();
-        } else if (path_attr.role == ExtrusionRole::Perimeter) {
+        } else if (path_attr.role == ExtrusionRole::Perimeter ||
+                   path_attr.role == ExtrusionRole::FirstInternalPerimeter ||
+                   path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
             speed = config.first_layer_perimeter_speed.at(extruder_id).float_value();
         } else if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             speed = config.first_layer_external_perimeter_speed.at(extruder_id).float_value();
@@ -4214,7 +4243,7 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
         }
 
         gcode += m_writer.toolchange(extruder_id);
-        m_temperature_manager.last_set_temperature = -1;  // invalidate on tool change
+        m_temperature_manager.invalidate();  // invalidate on tool change
         return gcode;
     }
 
@@ -4283,7 +4312,7 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
     else {
         // user provided his own toolchange gcode, no need to do anything
     }
-    m_temperature_manager.last_set_temperature = -1;  // invalidate on tool change
+    m_temperature_manager.invalidate();  // invalidate on tool change
 
     // Emit toolchange time annotation for CoolingBuffer.
     const double toolchange_time = config.get<double>("filament_change_time");
