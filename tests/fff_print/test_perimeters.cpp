@@ -639,3 +639,128 @@ SCENARIO("Seam alignment", "[Perimeters]")
         test(Slic3r::Test::TestMesh::small_dorito);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fork-specific tests: new perimeter roles and print-order options
+// ---------------------------------------------------------------------------
+
+SCENARIO("Fork: FirstInternalPerimeter and SecondInternalPerimeter role markers in G-code", "[Perimeters]")
+{
+    // With perimeters=3 on a plain cube, the slicer must assign:
+    //   depth 0  ->  ExternalPerimeter      -> ";TYPE:External perimeter"
+    //   depth 1  ->  FirstInternalPerimeter -> ";TYPE:First internal perimeter"
+    //   depth 2+ ->  SecondInternalPerimeter -> ";TYPE:Second internal perimeter"
+    // This test verifies the fork's new roles appear as TYPE: comments in G-code,
+    // catching any future removal or renaming of these roles.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+
+    THEN("G-code is non-empty") {
+        REQUIRE(! gcode.empty());
+    }
+    THEN("FirstInternalPerimeter role marker appears in G-code") {
+        REQUIRE(gcode.find(";TYPE:First internal perimeter") != std::string::npos);
+    }
+    THEN("SecondInternalPerimeter role marker appears in G-code") {
+        REQUIRE(gcode.find(";TYPE:Second internal perimeter") != std::string::npos);
+    }
+}
+
+SCENARIO("Fork: reverse_internal_perimeters smoke test", "[Perimeters]")
+{
+    // Smoke test: reverse_internal_perimeters must slice a simple cube without
+    // crashing. Non-empty G-code is the primary correctness criterion.
+    // A regression here would indicate the ordering code path was broken.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.print.items.opt("reverse_internal_perimeters").set(true);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}
+
+SCENARIO("Fork: swap_first_int_w_ext_perimeter smoke test", "[Perimeters]")
+{
+    // Smoke test: swap_first_int_w_ext_perimeter must slice a simple cube without
+    // crashing. Non-empty G-code is the primary correctness criterion.
+    // This option swaps the print order of first internal and external perimeters.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.print.items.opt("swap_first_int_w_ext_perimeter").set(true);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}
+
+SCENARIO("Fork: enable_temperature_offsets smoke test", "[Perimeters]")
+{
+    // Smoke test: enable_temperature_offsets with a non-zero external perimeter
+    // offset must slice without crashing. Catches removal or crash of the per-role
+    // temperature offset code path in _extrude(). A full M104 parse is not done
+    // here since that requires knowing the exact base temperature.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.print.items.opt("enable_temperature_offsets").set(true);
+    config.print.items.opt("external_perimeter_temperature_offset").set(5);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}
+
+SCENARIO("Fork: two_pass_bridge smoke test", "[Perimeters]")
+{
+    // Smoke test: slicing a model with bridging geometry should not crash.
+    // two_pass_bridge is an Object-level setting and cannot be set via TestConfig;
+    // this test verifies the default (disabled) path works and that the bridge code
+    // path introduced by the fork still compiles and does not regress under defaults.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.print.items.opt("overhangs").set(true);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::bridge }, config);
+    THEN("G-code produced for bridge geometry without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}
+
+SCENARIO("Fork: first_internal_perimeter_every_layers combine smoke test", "[Perimeters]")
+{
+    // Smoke test: first_internal_perimeter_every_layers=2 with a thin layer height
+    // triggers the per-role perimeter-combining code path. Non-empty G-code without
+    // crash is the primary correctness criterion.
+    TestConfig config;
+    config.print.items.opt("skirts").set(0);
+    config.print.items.opt("perimeters").set(3);
+    config.print.items.opt("layer_height").set(0.15);
+    config.print.items.opt("first_internal_perimeter_every_layers").set(2);
+    config.filament.at(0).items.opt("cooling").set(false);
+    config.print.items.opt("first_layer_speed").set(FloatOrPercentage{Percentage{100}});
+
+    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
+    THEN("G-code produced without crash") {
+        REQUIRE(! gcode.empty());
+    }
+}

@@ -146,6 +146,7 @@ struct ConfigItemDef
 
         Print_OutputOptions = 120,
         Print_Notes         = 121,
+        Print_TemperatureOffsets = 122,
 
         Filament_MaterialTemperatures = 200,
         Filament_ExtrusionCalibration = 201,
@@ -257,6 +258,7 @@ struct ConfigItemDef
         Print_OutputOptions_OutputFile = 1400,
 
         Print_Notes_Notes = 1500,
+        Print_TemperatureOffsets_RoleOffsets = 1501,
 
         ///////////////// Filament //////////////////
 
