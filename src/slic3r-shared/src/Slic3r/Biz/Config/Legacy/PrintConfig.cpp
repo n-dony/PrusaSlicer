@@ -343,6 +343,12 @@ static t_config_enum_values s_keys_map_ToolChangeOrderingType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ToolChangeOrderingType)
 
+static const t_config_enum_values s_keys_map_TemperatureOffsetLayers {
+    { "all",          int(TemperatureOffsetLayers::All) },
+    { "skip_topmost", int(TemperatureOffsetLayers::SkipTopmost) },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TemperatureOffsetLayers)
+
 static void assign_printer_technology_to_unknown(t_optiondef_map &options, PrinterTechnology printer_technology)
 {
     for (std::pair<const t_config_option_key, ConfigOptionDef> &kvp : options)
@@ -758,6 +764,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(60));
 
+    def = this->add("bridge_anchor_length", coFloat);
+    def->label = L("Bridge anchor length");
+    def->category = L("Speed");
+    def->tooltip = L("[Experimental] Extend bridge infill endpoints by this length into the adjacent "
+                     "perimeter to improve adhesion at bridge start/end points. The bridge "
+                     "overprints the perimeter by this amount; set to 0 to disable."
+                     " Not clipped against model boundaries — keep small near narrow perimeters.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("over_bridge_speed", coFloatOrPercent);
     // TRN: Label for speed used to print infill above bridges.
     def->label = L("Over bridges");
@@ -1133,6 +1151,48 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(50, true));
 
+    def = this->add("first_internal_perimeter_speed", coFloatOrPercent);
+    def->label = L("First internal perimeters");
+    def->category = L("Speed");
+    def->tooltip = L("This separate setting will affect the speed of the first internal perimeter, "
+                   "the one printed right next to the external perimeter. "
+                   "If expressed as percentage (for example: 80%) it will be calculated "
+                   "on the perimeters speed setting above. Set to zero for auto.");
+    def->sidetext = L("mm/s or %");
+    def->ratio_over = "perimeter_speed";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
+
+    def = this->add("first_internal_perimeter_acceleration", coFloat);
+    def->label = L("First internal perimeters");
+    def->tooltip = L("This is the acceleration your printer will use for first internal perimeters. "
+                     "Set zero to use the value for perimeters.");
+    def->sidetext = L("mm/s²");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("second_internal_perimeter_speed", coFloatOrPercent);
+    def->label = L("Second internal perimeters");
+    def->category = L("Speed");
+    def->tooltip = L("This separate setting will affect the speed of the second internal perimeter, "
+                   "counted inward from the external perimeter. "
+                   "If expressed as percentage (for example: 80%) it will be calculated "
+                   "on the perimeters speed setting above. Set to zero for auto.");
+    def->sidetext = L("mm/s or %");
+    def->ratio_over = "perimeter_speed";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
+
+    def = this->add("second_internal_perimeter_acceleration", coFloat);
+    def->label = L("Second internal perimeters");
+    def->tooltip = L("This is the acceleration your printer will use for second internal perimeters. "
+                     "Set zero to use the value for perimeters.");
+    def->sidetext = L("mm/s²");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("external_perimeters_first", coBool);
     def->label = L("External perimeters first");
     def->category = L("Layers and Perimeters");
@@ -1140,6 +1200,38 @@ void PrintConfigDef::init_fff_params()
                    "instead of the default inverse order.");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("swap_first_int_w_ext_perimeter", coBool);
+    def->label = L("Exchange the first internal perimeters with their external perimeter");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Print the first internal perimeter last within its group, after every other perimeter "
+                   "including the external one, instead of right after the external perimeter as usual. "
+                   "Sometimes called \"groove injection\": letting the external wall set before the first "
+                   "internal wall bonds to it can improve the surface finish at that boundary.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("reverse_internal_perimeters", coBool);
+    def->label = L("Reverse internal perimeter order");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Reverse the print order of internal perimeters at or beyond the depth set by "
+                   "\"Reverse internal perimeters starting at\", while leaving perimeters shallower "
+                   "than that depth in their normal order.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("reverse_internal_perimeters_at", coInt);
+    def->label = L("Reverse internal perimeters starting at");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Perimeter depth, counted inward from the external perimeter (1 = first internal "
+                   "perimeter, 2 = second internal perimeter, and so on), at and beyond which "
+                   "\"Reverse internal perimeter order\" takes effect. 0 disables the reversal "
+                   "regardless of that setting.");
+    def->sidetext = L("perimeter depth");
+    def->min = 0;
+    def->max = 10000;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt(2));
 
     def = this->add("extra_perimeters", coBool);
     def->label = L("Extra perimeters if needed");
@@ -1763,6 +1855,158 @@ void PrintConfigDef::init_fff_params()
     def->max = max_temp;
     def->set_default_value(new ConfigOptionInts { 200 });
 
+    def = this->add("enable_temperature_offsets", coBool);
+    def->label = L("Enable temperature offsets");
+    def->category = L("Temperature");
+    def->tooltip = L("Enable or disable temperature offset functionality. "
+                   "When disabled, all temperature offsets are ignored.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("temperature_offset_layers", coEnum);
+    def->label = L("Apply temperature offsets to");
+    def->category = L("Temperature");
+    def->tooltip = L("Control which layers receive temperature offsets. "
+                    "First layer is always excluded.");
+    def->mode = comExpert;
+    def->set_enum<TemperatureOffsetLayers>({
+        { "all",          L("All layers (except first)") },
+        { "skip_topmost", L("Skip topmost layer") },
+    });
+    def->set_default_value(new ConfigOptionEnum<TemperatureOffsetLayers>(TemperatureOffsetLayers::All));
+
+    def = this->add("external_perimeter_temperature_offset", coInt);
+    def->label = L("External perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing external perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("first_internal_perimeter_temperature_offset", coInt);
+    def->label = L("First internal perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing the first internal perimeter. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("second_internal_perimeter_temperature_offset", coInt);
+    def->label = L("Second internal perimeter");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing the second internal perimeter. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("perimeter_temperature_offset", coInt);
+    def->label = L("Other perimeters");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing other perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("overhang_perimeter_temperature_offset", coInt);
+    def->label = L("Overhang perimeters");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing overhang perimeters. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("bridge_temperature_offset", coInt);
+    def->label = L("Bridges");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing bridges. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("infill_temperature_offset", coInt);
+    def->label = L("Infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("solid_infill_temperature_offset", coInt);
+    def->label = L("Solid infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing solid infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("top_solid_infill_temperature_offset", coInt);
+    def->label = L("Top solid infill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing top solid infill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("gap_fill_temperature_offset", coInt);
+    def->label = L("Gap fill");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing gap fill. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("ironing_temperature_offset", coInt);
+    def->label = L("Ironing");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when ironing. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
+    def = this->add("support_material_temperature_offset", coInt);
+    def->label = L("Support material");
+    def->category = L("Temperature offsets");
+    def->tooltip = L("Temperature offset to be applied when printing support material. "
+                   "This value is added to the base temperature for the current layer.");
+    def->sidetext = L("°C");
+    def->min = -50;
+    def->max = 50;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt { 0 });
+
     def = this->add("full_fan_speed_layer", coInts);
     def->label = L("Full fan speed at layer");
     def->tooltip = L("Fan speed will be ramped up linearly from zero at layer \"disable_fan_first_layers\" "
@@ -1822,6 +2066,12 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(20));
+
+    def = this->add("high_def_print", coBool);
+    def->label = L("High definition print");
+    def->tooltip = L("Enables a quality preset: 3+ perimeters, swap first-internal with external order, combine internal perimeters and infill every 2 layers, and scarf seam on contours.");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("gcode_comments", coBool);
     def->label = L("Verbose G-code");
@@ -1948,6 +2198,24 @@ void PrintConfigDef::init_fff_params()
                    "infill layers while preserving thin perimeters, thus accuracy.");
     def->sidetext = L("layers");
     def->full_label = L("Combine infill every n layers");
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(1));
+
+    def = this->add("first_internal_perimeter_every_layers", coInt);
+    def->label = L("First internal perimeter every N layers");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Print first internal perimeters only every N layers. Default 1 (every layer). Set >= 2 to create a groove or combine thick perimeters.");
+    def->sidetext = L("layers");
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(1));
+
+    def = this->add("second_internal_perimeter_every_layers", coInt);
+    def->label = L("2nd+ internal perimeters every N layers");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Print second and all deeper internal perimeters (depth >= 2) only every N layers. Default 1 (every layer).");
+    def->sidetext = L("layers");
     def->min = 1;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
@@ -3709,6 +3977,15 @@ void PrintConfigDef::init_fff_params()
                      "If disabled, bridges look better but are reliable just for shorter bridged distances.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("two_pass_bridge", coBool);
+    def->label = L("Two-pass bridge");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("[Experimental] Re-extrude bridge infill in multiple passes (see Bridge pass count) "
+                      "to improve bridge quality by layering extrusions. "
+                      "Note: no dwell time between passes — each pass immediately follows the previous.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("thin_walls", coBool);
     def->label = L("Detect thin walls");

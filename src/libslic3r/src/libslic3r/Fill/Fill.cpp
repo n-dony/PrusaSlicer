@@ -602,15 +602,77 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 
                     thick_polylines.clear();
                 } else {
-                    // When prefer_clockwise_movements is true, we have to ensure that extrusion paths will not be reversed during path planning.
-                    extrusion_entities_append_paths(
-                        eec->entities, std::move(polylines),
-						ExtrusionAttributes{
-                            surface_fill.params.extrusion_role,
-							ExtrusionFlow{ flow_mm3_per_mm, float(flow_width), surface_fill.params.flow.height() },
-                            f->is_self_crossing()
-						}, !params.prefer_clockwise_movements);
-                    layerm.m_fills.entities.push_back(eec);
+                    // TODO(two_pass_bridge): pass_index is set here. Global dwell-time batching
+                    // (all pass-0 before all pass-1 across the layer) requires reordering in
+                    // get_normal_extrusions() (ExtrusionOrder.cpp) before path smoothing —
+                    // deferred to a follow-on commit.
+                    const bool do_two_pass = surface_fill.surface.is_bridge()
+                        && this->object()->config().get<bool>("two_pass_bridge");
+
+                    // Extend bridge endpoints into the adjacent perimeter for better anchoring.
+                    if (surface_fill.surface.is_bridge()) {
+                        const double anchor_len = scale_(layerm.region().config().get<double>("bridge_anchor_length"));
+                        if (anchor_len > 0.) {
+                            for (Polyline &pl : polylines) {
+                                if (pl.points.size() >= 2) {
+                                    // Extend the front point away from the second point
+                                    Vec2d dir_f = (pl.points.front() - pl.points[1]).cast<double>();
+                                    const double len_f = dir_f.norm();
+                                    if (len_f > 0.)
+                                        pl.points.front() = (pl.points.front().cast<double>() + dir_f / len_f * anchor_len).cast<coord_t>();
+                                    // Extend the back point away from the second-to-last point
+                                    Vec2d dir_b = (pl.points.back() - pl.points[pl.points.size() - 2]).cast<double>();
+                                    const double len_b = dir_b.norm();
+                                    if (len_b > 0.)
+                                        pl.points.back() = (pl.points.back().cast<double>() + dir_b / len_b * anchor_len).cast<coord_t>();
+                                }
+                            }
+                        }
+                    }
+
+                    if (do_two_pass) {
+                        const float pass_height = surface_fill.params.flow.height() * 0.5f;
+                        const double pass_mm3   = flow_mm3_per_mm * 0.5;
+
+                        // no_sort=true preserves pass order so the path chainer cannot interleave passes.
+                        eec->no_sort = true;
+
+                        // Foundation pass (index 0) — copy polylines
+                        {
+                            ExtrusionAttributes attrs{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
+                                f->is_self_crossing()
+                            };
+                            attrs.pass_index = uint16_t(0);
+                            extrusion_entities_append_paths(
+                                eec->entities, Polylines{polylines},
+                                attrs, !params.prefer_clockwise_movements);
+                        }
+                        // Final pass (index 1) — move polylines
+                        {
+                            ExtrusionAttributes attrs{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
+                                f->is_self_crossing()
+                            };
+                            attrs.pass_index = uint16_t(1);
+                            extrusion_entities_append_paths(
+                                eec->entities, std::move(polylines),
+                                attrs, !params.prefer_clockwise_movements);
+                        }
+                        layerm.m_fills.entities.push_back(eec);
+                    } else {
+                        // When prefer_clockwise_movements is true, we have to ensure that extrusion paths will not be reversed during path planning.
+                        extrusion_entities_append_paths(
+                            eec->entities, std::move(polylines),
+                            ExtrusionAttributes{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ flow_mm3_per_mm, float(flow_width), surface_fill.params.flow.height() },
+                                f->is_self_crossing()
+                            }, !params.prefer_clockwise_movements);
+                        layerm.m_fills.entities.push_back(eec);
+                    }
                 }
                 insert_fills_into_islands(*this, uint32_t(surface_fill.region_id), fill_begin, uint32_t(layerm.fills().size()));
 		    }

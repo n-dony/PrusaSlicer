@@ -270,6 +270,16 @@ unsigned get_seam_choice_value(const SeamChoice &seam_choice, const Perimeters::
     return std::max(previous_value, next_value);
 }
 
+// Is this loop an inner (non-external, non-overhang) perimeter? The first and second internal
+// perimeter carry their own ExtrusionRole but are inner perimeters just like ExtrusionRole::Perimeter,
+// so every inner-perimeter decision in this file has to accept all three.
+static bool is_inner_perimeter_role(const ExtrusionRole role)
+{
+    return role == ExtrusionRole::Perimeter
+        || role == ExtrusionRole::FirstInternalPerimeter
+        || role == ExtrusionRole::SecondInternalPerimeter;
+}
+
 boost::variant<Point, Scarf::Scarf> finalize_seam_position(
     const ExtrusionLoop &loop,
     const PrintRegion *region,
@@ -283,7 +293,7 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
     using Perimeters::PointOnPerimeter;
 
     const Polygon loop_polygon{Geometry::to_polygon(loop)};
-    const bool do_staggering{staggered_inner_seams && loop.role() == ExtrusionRole::Perimeter};
+    const bool do_staggering{staggered_inner_seams && is_inner_perimeter_role(loop.role())};
     const double loop_width{loop.paths.empty() ? 0.0 : loop.paths.front().width()};
 
     const ExPolygon perimeter_polygon{Geometry::scaled(perimeter.positions)};
@@ -384,7 +394,7 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
             return scaled(loop_point);
         }
 
-        if (loop.role() != ExtrusionRole::Perimeter) { // Outter perimeter
+        if (!is_inner_perimeter_role(loop.role())) { // Outter perimeter
             const Vec2d start_point_candidate{project_to_extrusion_loop(
                 *outter_scarf_start_point,
                 perimeter,

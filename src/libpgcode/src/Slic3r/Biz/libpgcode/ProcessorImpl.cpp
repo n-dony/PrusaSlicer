@@ -1818,6 +1818,10 @@ GCodeExtrusionRole string_to_gcode_extrusion_role(const std::string_view role)
         return GCodeExtrusionRole::SupportMaterialInterface;
     else if (role == "Wipe tower")
         return GCodeExtrusionRole::WipeTower;
+    else if (role == "First internal perimeter")
+        return GCodeExtrusionRole::FirstInternalPerimeter;
+    else if (role == "Second internal perimeter")
+        return GCodeExtrusionRole::SecondInternalPerimeter;
     else if (role == "Custom")
         return GCodeExtrusionRole::Custom;
     else

@@ -447,6 +447,12 @@ private:
     float                               m_last_layer_z{ 0.0f };
     float                               m_max_layer_z{ 0.0f };
     float                               m_last_width{ 0.0f };
+    // Active Z offset applied for the current bridge pass so successive passes stack
+    // physically. Zero means no offset is active (normal extrusion or last pass).
+    double                              m_bridge_pass_z_offset = 0.;
+    // Whether the object layer being processed is the topmost layer of its PrintObject.
+    // Used by the per-role temperature offset system's "skip topmost layer" option.
+    bool                                m_is_topmost_object_layer{false};
 
     bool m_window_collapsed{false};
 
@@ -476,6 +482,34 @@ private:
     GCode::PrintObjectInstance          m_current_instance;
     // Back-pointer to Print (const).
     const Print*                        m_print;
+
+    // Per-role temperature offset management. Tracks the last commanded nozzle temperature
+    // so the system can suppress redundant M104/M109 commands.
+    struct RegionTemperatureManager {
+        // std::nullopt == "the current nozzle temperature was set by something other than this
+        // system, so we cannot compare against it"; the next extrusion then always re-emits.
+        std::optional<int> last_set_temperature;
+        // Returns the offset in degrees C for the given role, or 0 if offsets are disabled,
+        // this is the first layer, or (with temperature_offset_layers == SkipTopmost) this is
+        // the topmost layer of the object.
+        int get_temperature_offset(ExtrusionRole role,
+                            const PrintConfigView& config,
+                            int layer_index,
+                            bool is_topmost_layer) const;
+        // Should a temperature command be emitted to reach target_temp?
+        // change_threshold: minimum absolute delta in °C before a new command is emitted.
+        bool needs_temperature_change(int target_temp, double change_threshold) const {
+            if (!this->last_set_temperature.has_value())
+                return true;
+            const int delta = target_temp - *this->last_set_temperature;
+            return delta != 0 && double(std::abs(delta)) >= change_threshold;
+        }
+        // Record a temperature commanded by this system or any other part of the G-code export.
+        void note_temperature_set(int temperature) { this->last_set_temperature = temperature; }
+        // The current nozzle temperature is no longer known to us (e.g. wipe tower toolchange).
+        void invalidate() { this->last_set_temperature.reset(); }
+    };
+    RegionTemperatureManager            m_temperature_manager;
 
     struct EmitModifiers {
         EmitModifiers(bool emit_fan_speed_reset, bool emit_bridge_fan_start, bool emit_bridge_fan_end)

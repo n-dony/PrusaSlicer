@@ -54,6 +54,8 @@ struct Settings
 				true, // SupportMaterial
 				true, // SupportMaterialInterface
 				true, // WipeTower
+				true, // FirstInternalPerimeter
+				true, // SecondInternalPerimeter
 				true  // Custom
 		};
 };

@@ -5047,6 +5047,243 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def->tooltip = L("Name or ID of tool print preset to use as default when this print preset is selected.");
     def->init_fn = init_with("");
 
+    // Fork feature: first/second internal perimeter roles, perimeter ordering, per-role temperature offsets
+
+    def = defs.add("bridge_anchor_length", typeid(double));
+    def->location = Print;
+    def->label = L("Bridge anchor length");
+    def->gui_type = ConfigItemDef::GUIType::textfield;
+    def->tooltip = L("Length of bridge anchoring into the perimeter.");
+    def->units = {L("mm")};
+    def->min = 0;
+    def->init_fn = init_with(0.);
+
+    def = defs.add("first_internal_perimeter_speed", typeid(double));
+    def->location = Print;
+    def->label = L("First internal perimeter speed");
+    def->gui_type = ConfigItemDef::GUIType::textfield;
+    def->tooltip = L("Speed for printing first internal perimeters. Set to zero to use perimeter speed.");
+    def->units = {L("mm/s")};
+    def->min = 0;
+    def->init_fn = init_with(0.);
+
+    def = defs.add("second_internal_perimeter_speed", typeid(double));
+    def->location = Print;
+    def->label = L("Second internal perimeter speed");
+    def->gui_type = ConfigItemDef::GUIType::textfield;
+    def->tooltip = L("Speed for printing second internal perimeters. Set to zero to use perimeter speed.");
+    def->units = {L("mm/s")};
+    def->min = 0;
+    def->init_fn = init_with(0.);
+
+    def = defs.add("first_internal_perimeter_acceleration", typeid(double));
+    def->location = Print;
+    def->label = L("First internal perimeter acceleration");
+    def->gui_type = ConfigItemDef::GUIType::textfield;
+    def->tooltip = L("Acceleration for printing first internal perimeters.");
+    def->units = {L("mm/s²")};
+    def->min = 0;
+    def->init_fn = init_with(0.);
+
+    def = defs.add("second_internal_perimeter_acceleration", typeid(double));
+    def->location = Print;
+    def->label = L("Second internal perimeter acceleration");
+    def->gui_type = ConfigItemDef::GUIType::textfield;
+    def->tooltip = L("Acceleration for printing second internal perimeters.");
+    def->units = {L("mm/s²")};
+    def->min = 0;
+    def->init_fn = init_with(0.);
+
+    def = defs.add("swap_first_int_w_ext_perimeter", typeid(bool));
+    def->location = Print;
+    def->label = L("Swap first internal with external perimeter");
+    def->gui_type = ConfigItemDef::GUIType::checkbox;
+    def->tooltip = L("Swap the print order of the first internal and external perimeters.");
+    def->init_fn = init_with(false);
+
+    def = defs.add("reverse_internal_perimeters", typeid(bool));
+    def->location = Print;
+    def->label = L("Reverse internal perimeters");
+    def->gui_type = ConfigItemDef::GUIType::checkbox;
+    def->tooltip = L("Reverse the print order of internal perimeters.");
+    def->init_fn = init_with(false);
+
+    def = defs.add("reverse_internal_perimeters_at", typeid(int));
+    def->location = Print;
+    def->label = L("Reverse internal perimeters at");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Number of internal perimeters at which to reverse print order.");
+    def->units = {L("perimeters")};
+    def->min = 1;
+    def->init_fn = init_with(2);
+
+    def = defs.add("high_def_print", typeid(bool));
+    def->location = Print;
+    def->label = L("High definition print");
+    def->gui_type = ConfigItemDef::GUIType::checkbox;
+    def->tooltip = L("Enable high definition print mode.");
+    def->init_fn = init_with(false);
+
+    def = defs.add("first_internal_perimeter_every_layers", typeid(int));
+    def->location = Print;
+    def->label = L("First internal perimeter every n layers");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Number of layers between first internal perimeter extrusions.");
+    def->units = {L("layers")};
+    def->min = 1;
+    def->init_fn = init_with(1);
+
+    def = defs.add("second_internal_perimeter_every_layers", typeid(int));
+    def->location = Print;
+    def->label = L("Second internal perimeter every n layers");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Number of layers between second internal perimeter extrusions.");
+    def->units = {L("layers")};
+    def->min = 1;
+    def->init_fn = init_with(1);
+
+    def = defs.add("two_pass_bridge", typeid(bool));
+    def->location = Object;
+    def->label = L("Two-pass bridge");
+    def->gui_type = ConfigItemDef::GUIType::checkbox;
+    def->tooltip = L("Enable two-pass bridge extrusion for better bridging results.");
+    def->init_fn = init_with(false);
+
+    def = defs.add("enable_temperature_offsets", typeid(bool));
+    def->location = Print;
+    def->label = L("Enable per-role temperature offsets");
+    def->gui_type = ConfigItemDef::GUIType::checkbox;
+    def->tooltip = L("Enable temperature offsets applied per extrusion role during G-code emission.");
+    def->init_fn = init_with(false);
+
+    def = defs.add("temperature_offset_layers", typeid(int));
+    def->location = Print;
+    def->label = L("Temperature offset layers");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Number of layers over which to apply temperature offsets.");
+    def->units = {L("layers")};
+    def->init_fn = init_with(0);
+
+    def = defs.add("external_perimeter_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("External perimeter temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing external perimeters.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("first_internal_perimeter_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("First internal perimeter temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing first internal perimeters.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("second_internal_perimeter_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Second internal perimeter temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing second internal perimeters.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("perimeter_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Perimeter temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing inner perimeters.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("overhang_perimeter_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Overhang perimeter temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing overhang perimeters.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("bridge_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Bridge temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing bridges.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("infill_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Infill temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing infill.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("solid_infill_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Solid infill temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing solid infill.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("top_solid_infill_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Top solid infill temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing top solid infill.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("gap_fill_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Gap fill temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing gap fill.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("ironing_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Ironing temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when ironing.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
+    def = defs.add("support_material_temperature_offset", typeid(int));
+    def->location = Print;
+    def->label = L("Support material temperature offset");
+    def->gui_type = ConfigItemDef::GUIType::spinbox;
+    def->tooltip = L("Temperature offset (±50°C) applied when printing support material.");
+    def->units = {L("°C")};
+    def->min = -50;
+    def->max = 50;
+    def->init_fn = init_with(0);
+
 }
 
 } // namespace Slic3r::Domain

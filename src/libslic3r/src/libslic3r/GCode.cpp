@@ -308,6 +308,56 @@ void GCodeGenerator::PlaceholderParserIntegration::validate_output_vector_variab
     }
 }
 
+int GCodeGenerator::RegionTemperatureManager::get_temperature_offset(
+    ExtrusionRole role,
+    const PrintConfigView& config,
+    int layer_index,
+    bool is_topmost_layer) const
+{
+    // Always skip the first layer -- non-negotiable for bed adhesion.
+    if (layer_index <= 0)
+        return 0;
+
+    if (!config.get<bool>("enable_temperature_offsets"))
+        return 0;
+
+    // temperature_offset_layers: 0 == All, 1 == SkipTopmost.
+    if (config.get<int>("temperature_offset_layers") == 1 && is_topmost_layer)
+        return 0;
+
+    // Bridging perimeters of any depth (external, first-internal, second-internal, generic)
+    // all share overhang_perimeter_temperature_offset. Check bridge first so that e.g.
+    // Perimeter|External|Bridge does not fall through to ExternalPerimeter's offset.
+    if (role.is_perimeter() && role.is_bridge())
+        return config.get<int>("overhang_perimeter_temperature_offset");
+    if (role == ExtrusionRole::ExternalPerimeter)
+        return config.get<int>("external_perimeter_temperature_offset");
+    if (role == ExtrusionRole::FirstInternalPerimeter)
+        return config.get<int>("first_internal_perimeter_temperature_offset");
+    if (role == ExtrusionRole::SecondInternalPerimeter)
+        return config.get<int>("second_internal_perimeter_temperature_offset");
+    if (role == ExtrusionRole::Perimeter)
+        return config.get<int>("perimeter_temperature_offset");
+    if (role == ExtrusionRole::InternalInfill)
+        return config.get<int>("infill_temperature_offset");
+    if (role == ExtrusionRole::SolidInfill)
+        return config.get<int>("solid_infill_temperature_offset");
+    if (role == ExtrusionRole::TopSolidInfill)
+        return config.get<int>("top_solid_infill_temperature_offset");
+    if (role == ExtrusionRole::SupportMaterial)
+        return config.get<int>("support_material_temperature_offset");
+    if (role == ExtrusionRole::BridgeInfill)
+        return config.get<int>("bridge_temperature_offset");
+    if (role == ExtrusionRole::GapFill)
+        return config.get<int>("gap_fill_temperature_offset");
+    if (role == ExtrusionRole::Ironing)
+        return config.get<int>("ironing_temperature_offset");
+    if (role == ExtrusionRole::InfillOverBridge)
+        return config.get<int>("solid_infill_temperature_offset");
+
+    return 0;
+}
+
 // Collect pairs of object_layer + support_layer sorted by print_z.
 // object_layer & support_layer are considered to be on the same print_z, if they are not further than EPSILON.
 GCodeGenerator::ObjectsLayerToPrint GCodeGenerator::collect_layers_to_print(const PrintObject& object)
@@ -2758,6 +2808,10 @@ LayerResult GCodeGenerator::process_layer(
         first_object_extrude_config
     ); // this will increase m_layer_index
     m_layer = &layer;
+    m_bridge_pass_z_offset = 0.; // discard bridge-pass Z offset from previous layer
+    // Track whether this is the topmost layer of its PrintObject (used by per-role temperature offsets).
+    m_is_topmost_object_layer = (object_layer != nullptr) && !object_layer->object()->layers().empty()
+        && object_layer == object_layer->object()->layers().back();
 
     if (this->line_distancer_is_required(layer_tools.extruders, instances_to_print) && this->m_layer != nullptr && this->m_layer->lower_layer != nullptr)
         m_travel_obstacle_tracker.init_layer(layer, layers);
@@ -3029,6 +3083,25 @@ std::string GCodeGenerator::extrude_slices(
         print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
 
     std::string gcode;
+    // Bridge foundation pre-pass: print all pass_index==0 fill paths before any perimeters.
+    // These are the lower "foundation" passes of a two-pass bridge that must cure before the
+    // upper fill pass is printed on top of them.
+    if (m_print->config().get<bool>("two_pass_bridge")) {
+        for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
+            for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
+                for (const InfillRange &infill_range : island_extrusions.infill_ranges) {
+                    if (infill_range.items.empty())
+                        continue;
+                    const Biz::Slicing::ExtrudeConfig region_config{infill_range.region->config()};
+                    for (const GCode::SmoothPath &path : infill_range.items) {
+                        if (!path.empty() && path.front().path_attributes.pass_index.has_value()
+                                && *path.front().path_attributes.pass_index == 0)
+                            gcode += this->extrude_smooth_path(path, false, "infill", -1.0, region_config);
+                    }
+                }
+            }
+        }
+    }
     for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
         for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
             if (island_extrusions.infill_first) {
@@ -3240,6 +3313,9 @@ std::string GCodeGenerator::extrude_infill_ranges(
         if (!infill_range.items.empty()) {
             const Biz::Slicing::ExtrudeConfig config{infill_range.region->config()};
             for (const GCode::SmoothPath &path : infill_range.items) {
+                if (!path.empty() && path.front().path_attributes.pass_index.has_value()
+                        && *path.front().path_attributes.pass_index == 0)
+                    continue; // already printed in bridge foundation pre-pass
                 gcode += this->extrude_smooth_path(path, false, comment, -1.0, config);
             }
         }
@@ -3481,8 +3557,21 @@ std::string GCodeGenerator::_extrude(
         gcode += m_label_objects.maybe_change_instance(m_writer);
     }
 
+    // Two-pass bridge: shift nozzle Z so each sub-pass occupies its own vertical slice.
+    if (path_attr.pass_index.has_value()) {
+        const double z_adj = (*path_attr.pass_index == 0) ? -double(path_attr.height) : 0.;
+        if (std::abs(z_adj - m_bridge_pass_z_offset) > EPSILON) {
+            m_bridge_pass_z_offset = z_adj;
+            gcode += m_writer.travel_to_z(m_layer->print_z + z_adj, "bridge pass Z");
+        }
+    } else if (std::abs(m_bridge_pass_z_offset) > EPSILON) {
+        // Leaving bridge passes — restore Z to normal layer Z.
+        m_bridge_pass_z_offset = 0.;
+        gcode += m_writer.travel_to_z(m_layer->print_z, "restore Z after bridge passes");
+    }
+
     if (!this->last_position) {
-        const double z = this->m_last_layer_z;
+        const double z = this->m_last_layer_z + m_bridge_pass_z_offset;
         const std::string comment{"move to print after unknown position"};
         gcode += this->retract_and_wipe(config.retract_speed, config.travel_speed);
         gcode += m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
@@ -3493,8 +3582,8 @@ std::string GCodeGenerator::_extrude(
         comment += description;
         comment += description_bridge;
         comment += " point";
-        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z))};
-        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + (path.front().height_fraction - 1.0) * path_attr.height))};
+        const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z + m_bridge_pass_z_offset))};
+        const Vec3crd to{to_3d(path.front().point, scaled(this->m_last_layer_z + m_bridge_pass_z_offset + (path.front().height_fraction - 1.0) * path_attr.height))};
         const std::string travel_gcode{this->travel_to(from, to, path_attr.role, comment, [this](){
             return m_writer.multiple_extruders ? "" : m_label_objects.maybe_change_instance(m_writer);
         }, config)};
@@ -3512,6 +3601,7 @@ std::string GCodeGenerator::_extrude(
         // There is G-Code that is due to be inserted before an extrusion starts. Insert it.
         gcode += m_pending_pre_extrusion_gcode;
         m_pending_pre_extrusion_gcode.clear();
+        m_temperature_manager.invalidate(); // color_change_gcode may contain M104/M109
     }
 
     const unsigned extruder_id{m_writer.extruder()->id()};
@@ -3533,6 +3623,10 @@ std::string GCodeGenerator::_extrude(
             acceleration = config.infill_acceleration.at(extruder_id);
         } else if (config.external_perimeter_acceleration.at(extruder_id) > 0 && path_attr.role.is_external_perimeter()) {
             acceleration = config.external_perimeter_acceleration.at(extruder_id);
+        } else if (m_print->config().get<double>("first_internal_perimeter_acceleration") > 0 && path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            acceleration = m_print->config().get<double>("first_internal_perimeter_acceleration");
+        } else if (m_print->config().get<double>("second_internal_perimeter_acceleration") > 0 && path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
+            acceleration = m_print->config().get<double>("second_internal_perimeter_acceleration");
         } else if (config.perimeter_acceleration.at(extruder_id) > 0 && path_attr.role.is_perimeter()) {
             acceleration = config.perimeter_acceleration.at(extruder_id);
         } else {
@@ -3559,6 +3653,12 @@ std::string GCodeGenerator::_extrude(
             speed = perimeter_speed;
         } else if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
             speed = config.external_perimeter_speed.at(extruder_id).get_abs_value(perimeter_speed);
+        } else if (path_attr.role == ExtrusionRole::FirstInternalPerimeter) {
+            const double first_internal_speed = m_print->config().get<double>("first_internal_perimeter_speed");
+            speed = (first_internal_speed > 0) ? first_internal_speed : perimeter_speed;
+        } else if (path_attr.role == ExtrusionRole::SecondInternalPerimeter) {
+            const double second_internal_speed = m_print->config().get<double>("second_internal_perimeter_speed");
+            speed = (second_internal_speed > 0) ? second_internal_speed : perimeter_speed;
         } else if (path_attr.role.is_bridge()) {
             assert(path_attr.role.is_perimeter() || path_attr.role == ExtrusionRole::BridgeInfill);
             speed = config.bridge_speed.at(extruder_id);
@@ -3632,6 +3732,34 @@ std::string GCodeGenerator::_extrude(
 
     // cap speed with max_volumetric_speed anyway (even if user is not using autospeed)
     speed = cap_speed(speed, config, m_writer.extruder()->id(), path_attr);
+
+    // Per-role temperature offsets: emit M104 if the role-specific offset differs from the
+    // last set temperature. Skip the first layer (layer_index <= 0) and honour
+    // enable_temperature_offsets and autoemit_temperature_commands.
+    // m_layer->id() != 0 ensures we skip the first layer of every object (including objects
+    // printed sequentially after the first); m_layer_index is a monotonic counter that is
+    // never reset between objects.
+    if (m_print->config().get<bool>("enable_temperature_offsets")
+            && m_print->config().get<bool>("autoemit_temperature_commands")
+            && m_writer.extruder() && m_layer != nullptr && m_layer->id() != 0) {
+        const int offset = m_temperature_manager.get_temperature_offset(
+            path_attr.role, m_print->config(), m_layer_index, m_is_topmost_object_layer);
+        const int base_temp = m_print->config().get<std::vector<int>>("temperature").at(extruder_id);
+        // base_temp == 0 means temperature control is disabled for this extruder.
+        // Do not emit a spurious M104/M109 in that case.
+        if (base_temp > 0) {
+            const int target_temp = std::max(0, base_temp + offset);
+            // Use a threshold of 1 °C: only emit if the rounded target actually differs.
+            if (m_temperature_manager.needs_temperature_change(target_temp, 1.0)) {
+                const std::string temp_gcode = m_writer.set_temperature(
+                    static_cast<unsigned int>(target_temp), false /* no wait */);
+                if (!temp_gcode.empty()) {
+                    gcode += temp_gcode;
+                    m_temperature_manager.note_temperature_set(target_temp);
+                }
+            }
+        }
+    }
 
     double F = speed * 60;  // convert mm/sec to mm/min
 
@@ -4086,6 +4214,7 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
         }
 
         gcode += m_writer.toolchange(extruder_id);
+        m_temperature_manager.last_set_temperature = -1;  // invalidate on tool change
         return gcode;
     }
 
@@ -4154,6 +4283,7 @@ std::string GCodeGenerator::set_extruder(unsigned int extruder_id, double print_
     else {
         // user provided his own toolchange gcode, no need to do anything
     }
+    m_temperature_manager.last_set_temperature = -1;  // invalidate on tool change
 
     // Emit toolchange time annotation for CoolingBuffer.
     const double toolchange_time = config.get<double>("filament_change_time");

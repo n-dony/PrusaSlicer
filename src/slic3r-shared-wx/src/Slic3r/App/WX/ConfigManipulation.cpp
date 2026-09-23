@@ -4,6 +4,7 @@
 
 #include <wx/window.h>
 #include <wx/string.h>
+#include <algorithm>
 
 namespace Slic3r::App::WX {
 

@@ -51,6 +51,8 @@ std::string to_string(GCodeExtrusionRole role)
     case GCodeExtrusionRole::SupportMaterial:          { return _u8L("Support material"); }
     case GCodeExtrusionRole::SupportMaterialInterface: { return _u8L("Support material interface"); }
     case GCodeExtrusionRole::WipeTower:                { return _u8L("Wipe tower"); }
+    case GCodeExtrusionRole::FirstInternalPerimeter:   { return _u8L("First internal perimeter"); }
+    case GCodeExtrusionRole::SecondInternalPerimeter:  { return _u8L("Second internal perimeter"); }
     case GCodeExtrusionRole::Custom:                   { return _u8L("Custom"); }
     }
 }
