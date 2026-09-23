@@ -5183,6 +5183,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("bridge_anchor_length", typeid(double));
     def->location = Print;
     def->label = L("Bridge anchor length");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::textfield;
     def->tooltip = L("Length of bridge anchoring into the perimeter.");
     def->units = {L("mm")};
@@ -5192,6 +5194,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("first_internal_perimeter_speed", typeid(double));
     def->location = Print;
     def->label = L("First internal perimeter speed");
+    def->option_group = ConfigItemDef::OptionGroup::Print_Speed_MainStructure;
+    def->category = ConfigItemDef::Category::Print_Speed;
     def->gui_type = ConfigItemDef::GUIType::textfield;
     def->tooltip = L("Speed for printing first internal perimeters. Set to zero to use perimeter speed.");
     def->units = {L("mm/s")};
@@ -5201,6 +5205,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("second_internal_perimeter_speed", typeid(double));
     def->location = Print;
     def->label = L("Second internal perimeter speed");
+    def->option_group = ConfigItemDef::OptionGroup::Print_Speed_MainStructure;
+    def->category = ConfigItemDef::Category::Print_Speed;
     def->gui_type = ConfigItemDef::GUIType::textfield;
     def->tooltip = L("Speed for printing second internal perimeters. Set to zero to use perimeter speed.");
     def->units = {L("mm/s")};
@@ -5210,6 +5216,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("first_internal_perimeter_acceleration", typeid(double));
     def->location = Print;
     def->label = L("First internal perimeter acceleration");
+    def->option_group = ConfigItemDef::OptionGroup::Print_MotionDynamics_MainStructureAcceleration;
+    def->category = ConfigItemDef::Category::Print_MotionDynamics;
     def->gui_type = ConfigItemDef::GUIType::textfield;
     def->tooltip = L("Acceleration for printing first internal perimeters.");
     def->units = {L("mm/s²")};
@@ -5219,6 +5227,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("second_internal_perimeter_acceleration", typeid(double));
     def->location = Print;
     def->label = L("Second internal perimeter acceleration");
+    def->option_group = ConfigItemDef::OptionGroup::Print_MotionDynamics_MainStructureAcceleration;
+    def->category = ConfigItemDef::Category::Print_MotionDynamics;
     def->gui_type = ConfigItemDef::GUIType::textfield;
     def->tooltip = L("Acceleration for printing second internal perimeters.");
     def->units = {L("mm/s²")};
@@ -5228,6 +5238,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("swap_first_int_w_ext_perimeter", typeid(bool));
     def->location = Print;
     def->label = L("Swap first internal with external perimeter");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::checkbox;
     def->tooltip = L("Swap the print order of the first internal and external perimeters.");
     def->init_fn = init_with(false);
@@ -5235,6 +5247,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("reverse_internal_perimeters", typeid(bool));
     def->location = Print;
     def->label = L("Reverse internal perimeters");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::checkbox;
     def->tooltip = L("Reverse the print order of internal perimeters.");
     def->init_fn = init_with(false);
@@ -5242,6 +5256,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("reverse_internal_perimeters_at", typeid(int));
     def->location = Print;
     def->label = L("Reverse internal perimeters at");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Number of internal perimeters at which to reverse print order.");
     def->units = {L("perimeters")};
@@ -5251,6 +5267,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("high_def_print", typeid(bool));
     def->location = Print;
     def->label = L("High definition print");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::checkbox;
     def->tooltip = L("Enable high definition print mode.");
     def->init_fn = init_with(false);
@@ -5258,6 +5276,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("first_internal_perimeter_every_layers", typeid(int));
     def->location = Print;
     def->label = L("First internal perimeter every n layers");
+    def->option_group = ConfigItemDef::OptionGroup::Print_Infill_InfillCombination;
+    def->category = ConfigItemDef::Category::Print_Infill;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Number of layers between first internal perimeter extrusions.");
     def->units = {L("layers")};
@@ -5267,6 +5287,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("second_internal_perimeter_every_layers", typeid(int));
     def->location = Print;
     def->label = L("Second internal perimeter every n layers");
+    def->option_group = ConfigItemDef::OptionGroup::Print_Infill_InfillCombination;
+    def->category = ConfigItemDef::Category::Print_Infill;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Number of layers between second internal perimeter extrusions.");
     def->units = {L("layers")};
@@ -5276,6 +5298,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("two_pass_bridge", typeid(bool));
     def->location = Object;
     def->label = L("Two-pass bridge");
+    def->option_group = ConfigItemDef::OptionGroup::Print_WallsPerimeters_WallsQuality;
+    def->category = ConfigItemDef::Category::Print_WallsPerimeters;
     def->gui_type = ConfigItemDef::GUIType::checkbox;
     def->tooltip = L("Enable two-pass bridge extrusion for better bridging results.");
     def->init_fn = init_with(false);
@@ -5283,6 +5307,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("enable_temperature_offsets", typeid(bool));
     def->location = Print;
     def->label = L("Enable per-role temperature offsets");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::checkbox;
     def->tooltip = L("Enable temperature offsets applied per extrusion role during G-code emission.");
     def->init_fn = init_with(false);
@@ -5290,6 +5316,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("temperature_offset_layers", typeid(int));
     def->location = Print;
     def->label = L("Temperature offset layers");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Number of layers over which to apply temperature offsets.");
     def->units = {L("layers")};
@@ -5298,6 +5326,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("external_perimeter_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("External perimeter temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing external perimeters.");
     def->units = {L("°C")};
@@ -5308,6 +5338,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("first_internal_perimeter_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("First internal perimeter temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing first internal perimeters.");
     def->units = {L("°C")};
@@ -5318,6 +5350,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("second_internal_perimeter_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Second internal perimeter temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing second internal perimeters.");
     def->units = {L("°C")};
@@ -5328,6 +5362,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("perimeter_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Perimeter temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing inner perimeters.");
     def->units = {L("°C")};
@@ -5338,6 +5374,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("overhang_perimeter_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Overhang perimeter temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing overhang perimeters.");
     def->units = {L("°C")};
@@ -5348,6 +5386,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("bridge_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Bridge temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing bridges.");
     def->units = {L("°C")};
@@ -5358,6 +5398,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("infill_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Infill temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing infill.");
     def->units = {L("°C")};
@@ -5368,6 +5410,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("solid_infill_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Solid infill temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing solid infill.");
     def->units = {L("°C")};
@@ -5378,6 +5422,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("top_solid_infill_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Top solid infill temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing top solid infill.");
     def->units = {L("°C")};
@@ -5388,6 +5434,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("gap_fill_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Gap fill temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing gap fill.");
     def->units = {L("°C")};
@@ -5398,6 +5446,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("ironing_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Ironing temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when ironing.");
     def->units = {L("°C")};
@@ -5408,6 +5458,8 @@ void fdm_config_init_fn(ConfigDefinitions& defs)
     def = defs.add("support_material_temperature_offset", typeid(int));
     def->location = Print;
     def->label = L("Support material temperature offset");
+    def->option_group = ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets;
+    def->category = ConfigItemDef::Category::Print_TemperatureOffsets;
     def->gui_type = ConfigItemDef::GUIType::spinbox;
     def->tooltip = L("Temperature offset (±50°C) applied when printing support material.");
     def->units = {L("°C")};

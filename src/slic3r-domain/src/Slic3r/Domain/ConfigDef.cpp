@@ -46,6 +46,8 @@ std::string ConfigItemDef::translate_category(Category category, const PrinterTe
         return L("Output options");
     case ConfigItemDef::Category::Print_Notes:
         return L("Notes");
+    case ConfigItemDef::Category::Print_TemperatureOffsets:
+        return L("Temperature offsets");
     case ConfigItemDef::Category::Filament_MaterialTemperatures:
         return L("Material & temperatures");
     case ConfigItemDef::Category::Filament_ExtrusionCalibration:
@@ -220,6 +222,8 @@ std::string ConfigItemDef::translate_option_group(OptionGroup option_group)
         return L("Custom G-code");
     case ConfigItemDef::OptionGroup::Print_Notes_Notes:
         return L("Notes");
+    case ConfigItemDef::OptionGroup::Print_TemperatureOffsets_RoleOffsets:
+        return L("Role temperature offsets");
     case ConfigItemDef::OptionGroup::Filament_MaterialTemperatures_MaterialProperty:
         return L("Material property");
     case ConfigItemDef::OptionGroup::Filament_MaterialTemperatures_BedChamberTemperature:
