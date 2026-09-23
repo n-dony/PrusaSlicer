@@ -93,6 +93,8 @@ static const std::array<ColorRGB, GCODE_EXTRUSION_ROLES_COUNT> DEFAULT_EXTRUSION
     { 0.00f, 1.00f, 0.00f }, // SupportMaterial
     { 0.00f, 0.50f, 0.00f }, // SupportMaterialInterface
     { 0.70f, 0.89f, 0.67f }, // WipeTower
+    { 1.00f, 1.00f, 0.20f }, // FirstInternalPerimeter
+    { 1.00f, 0.20f, 0.20f }, // SecondInternalPerimeter
     { 0.37f, 0.82f, 0.58f }  // Custom
 }};
 

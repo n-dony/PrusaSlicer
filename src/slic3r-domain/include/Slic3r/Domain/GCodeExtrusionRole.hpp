@@ -21,6 +21,9 @@ enum class GCodeExtrusionRole : uint8_t {
     SupportMaterial,
     SupportMaterialInterface,
     WipeTower,
+    // First/second internal perimeter roles — distinct from generic Perimeter for per-role speed/temp controls.
+    FirstInternalPerimeter,
+    SecondInternalPerimeter,
     // Custom (user defined) G-code block, for example start / end G-code.
     Custom,
     // Stopper to count number of enums.

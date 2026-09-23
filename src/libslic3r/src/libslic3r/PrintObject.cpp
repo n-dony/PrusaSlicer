@@ -311,6 +311,8 @@ void PrintObject::make_perimeters()
     m_print->throw_if_canceled();
     SPDLOG_DEBUG("Generating perimeters in parallel - end");
 
+    this->combine_perimeters();
+
     this->set_done(posPerimeters);
 }
 
@@ -2989,6 +2991,215 @@ void PrintObject::combine_infill()
         }
     }
 } // void PrintObject::combine_infill()
+
+// Combine perimeters of specific roles across layers, analogous to combine_infill().
+//
+// For first_internal_perimeter_every_layers = N (N >= 2) the algorithm:
+//   - Groups up to N adjacent layers whose combined height does not exceed one nozzle diameter.
+//   - On the group-top layer it inflates matching ExtrusionPath objects to the combined height.
+//   - On sub-layers it voids the matching paths (clears their polyline) so no duplicate
+//     material is deposited.
+// Known limitation: loop-to-loop spacing on the group-top layer reflects the
+// original thin-layer offsets from PerimeterGenerator (a geometric approximation).
+void PrintObject::combine_perimeters()
+{
+    if (this->print()->config().get<bool>("spiral_vase"))
+        return;
+
+    // Nothing to combine when there are fewer than 2 layers.
+    if (m_layers.size() < 2)
+        return;
+
+    struct RoleSpec {
+        ExtrusionRole role;
+        int           every_layers;
+    };
+
+    for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
+        m_print->throw_if_canceled();
+        const PrintRegion &region = this->printing_region(region_id);
+
+        if (region.extruder_config_value<int>("perimeters", FlowRole::frPerimeter) == 0)
+            continue;
+
+        const double nozzle_d      = region.nozzle_diameter(FlowRole::frPerimeter);
+        const double max_combine_h = nozzle_d;
+
+        const std::array<RoleSpec, 2> specs = {{
+            { ExtrusionRole::FirstInternalPerimeter,
+              region.extruder_config_value<int>("first_internal_perimeter_every_layers",  FlowRole::frPerimeter) },
+            { ExtrusionRole::SecondInternalPerimeter,
+              region.extruder_config_value<int>("second_internal_perimeter_every_layers", FlowRole::frPerimeter) },
+            // ExternalPerimeter is intentionally excluded: voiding the outer wall on sub-layers
+            // has no lateral confinement and risks structural wall gaps.
+        }};
+
+        for (const RoleSpec &spec : specs) {
+            if (spec.every_layers < 2)
+                continue;
+
+            // FirstInternalPerimeter and SecondInternalPerimeter both use frPerimeter flow
+            // in this codebase (no separate FlowRole is defined for them).
+            const FlowRole flow_role = FlowRole::frPerimeter;
+
+            // Bitmask-safe role predicate (catches OverhangPerimeter variants too). Bridges excluded.
+            auto role_matches = [&](ExtrusionRole r) -> bool {
+                if (spec.role == ExtrusionRole::FirstInternalPerimeter)
+                    return r.is_first_internal_perimeter() && !r.is_bridge();
+                return r.is_second_internal_perimeter() && !r.is_bridge();
+            };
+
+            // Stage 1: height-based grouping (mirrors combine_infill stage 1).
+            std::vector<size_t> combine(m_layers.size(), 0);
+            {
+                double current_h = 0.;
+                size_t n         = 0;
+                for (size_t idx = 0; idx < m_layers.size(); ++idx) {
+                    m_print->throw_if_canceled();
+                    const Layer &layer = *m_layers[idx];
+                    if (layer.id() == 0)
+                        continue; // may not be first in array (raft)
+                    if (current_h + layer.height >= max_combine_h + EPSILON ||
+                        n >= size_t(spec.every_layers)) {
+                        combine[idx - 1] = n;
+                        current_h = 0.;
+                        n         = 0;
+                    }
+                    current_h += layer.height;
+                    ++n;
+                }
+                combine[m_layers.size() - 1] = n;
+            }
+
+            // Stage 2: geometry check and apply.
+            for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
+                m_print->throw_if_canceled();
+                const size_t n = combine[top_idx];
+                if (n <= 1)
+                    continue;
+                const size_t group_start = top_idx + 1 - n;
+
+                // Geometry compatibility: intersection of fill_expolygons across window.
+                ExPolygons common = m_layers[group_start]->regions()[region_id]->m_fill_expolygons;
+                for (size_t i = group_start + 1; i <= top_idx && !common.empty(); ++i)
+                    common = intersection_ex(common,
+                                            m_layers[i]->regions()[region_id]->m_fill_expolygons);
+                if (common.empty())
+                    continue;
+
+                // Only combine when geometry is nearly prismatic across the group.
+                // If the common area is less than 90 % of the top layer's fill area,
+                // the layers diverge too much (e.g. an overhang begins) and combining
+                // would extrude material in the wrong place.
+                {
+                    const double common_area   = Algorithms::ExPolygon::area(common);
+                    const double top_fill_area = Algorithms::ExPolygon::area(
+                        m_layers[top_idx]->regions()[region_id]->m_fill_expolygons);
+                    if (top_fill_area > 0.0 && common_area / top_fill_area < 0.9)
+                        continue;
+                }
+
+                // Only proceed when the group-top layer has perimeters for this region.
+                if (m_layers[top_idx]->regions()[region_id]->m_perimeters.entities.empty())
+                    continue;
+
+                // Sum actual layer heights for correct combined flow (not n * top_height).
+                double H = 0.;
+                for (size_t i = group_start; i <= top_idx; ++i)
+                    H += m_layers[i]->height;
+                Flow   cflow = m_layers[top_idx]->regions()[region_id]->flow(flow_role, H);
+                float  ch    = float(H);
+                float  cw    = cflow.width();
+                double cmm3  = cflow.mm3_per_mm();
+
+                // Walk island EECs in a layer region's m_perimeters and apply action.
+                // m_perimeters.entities holds one ExtrusionEntityCollection* per island.
+                auto walk = [&](LayerRegion *rm, auto &&action) {
+                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                        auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
+                        if (!island)
+                            continue;
+                        for (ExtrusionEntity *child : island->entities) {
+                            if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
+                                for (ExtrusionPath &path : loop->paths)
+                                    action(path);
+                            } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
+                                for (ExtrusionPath &path : mpath->paths)
+                                    action(path);
+                            } else if (auto *path = dynamic_cast<ExtrusionPath *>(child)) {
+                                action(*path);
+                            }
+                        }
+                    }
+                };
+
+                // Scale matching paths on the group-top layer.
+                walk(m_layers[top_idx]->regions()[region_id], [&](ExtrusionPath &path) {
+                    if (!role_matches(path.role()))
+                        return;
+                    ExtrusionAttributes new_attr = path.attributes();
+                    new_attr.height     = ch;
+                    new_attr.width      = cw;
+                    new_attr.mm3_per_mm = cmm3;
+                    path = ExtrusionPath(path.polyline, new_attr);
+                });
+
+                // Void matching paths on non-top layers. Clear the polyline so the
+                // path carries no geometry; the role is intentionally preserved so
+                // role-gated consumers see a valid perimeter role and do not perform
+                // an out-of-bounds access.
+                for (size_t i = group_start; i < top_idx; ++i) {
+                    walk(m_layers[i]->regions()[region_id], [&](ExtrusionPath &path) {
+                        if (!role_matches(path.role()))
+                            return;
+                        path.polyline = Polyline{};
+                    });
+                }
+
+                // Remove empty-polyline paths from loops on voided layers so
+                // downstream geometry consumers never encounter zero-point paths.
+                for (size_t i = group_start; i < top_idx; ++i) {
+                    LayerRegion *rm = m_layers[i]->regions()[region_id];
+                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                        auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
+                        if (!island) continue;
+                        for (ExtrusionEntity *child : island->entities) {
+                            if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
+                                loop->paths.erase(
+                                    std::remove_if(loop->paths.begin(), loop->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    loop->paths.end());
+                            } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
+                                mpath->paths.erase(
+                                    std::remove_if(mpath->paths.begin(), mpath->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    mpath->paths.end());
+                            }
+                        }
+                        // Guard: remove and delete any loop/multipath that became
+                        // completely empty after the path-erasure step above.
+                        {
+                            auto &ents = island->entities;
+                            for (auto it = ents.begin(); it != ents.end(); ) {
+                                bool is_empty = false;
+                                if (auto *lp = dynamic_cast<ExtrusionLoop *>(*it))
+                                    is_empty = lp->paths.empty();
+                                else if (auto *mp = dynamic_cast<ExtrusionMultiPath *>(*it))
+                                    is_empty = mp->paths.empty();
+                                if (is_empty) {
+                                    delete *it;
+                                    it = ents.erase(it);
+                                } else {
+                                    ++it;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+} // void PrintObject::combine_perimeters()
 
 void PrintObject::_generate_support_material()
 {

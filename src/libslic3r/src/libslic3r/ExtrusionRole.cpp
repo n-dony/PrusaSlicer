@@ -12,8 +12,10 @@ GCodeExtrusionRole extrusion_role_to_gcode_extrusion_role(ExtrusionRole role)
 {
     if (role == ExtrusionRole::None)                return GCodeExtrusionRole::None;
     if (role.is_perimeter()) {
-        return role.is_bridge() ? GCodeExtrusionRole::OverhangPerimeter :
-               role.is_external() ? GCodeExtrusionRole::ExternalPerimeter : GCodeExtrusionRole::Perimeter;
+        return role.is_bridge()           ? GCodeExtrusionRole::OverhangPerimeter :
+               role.is_external()         ? GCodeExtrusionRole::ExternalPerimeter :
+               role.is_first_internal()   ? GCodeExtrusionRole::FirstInternalPerimeter :
+               role.is_second_internal()  ? GCodeExtrusionRole::SecondInternalPerimeter : GCodeExtrusionRole::Perimeter;
     }
     if (role == ExtrusionRole::InternalInfill)      return GCodeExtrusionRole::InternalInfill;
     if (role == ExtrusionRole::SolidInfill)         return GCodeExtrusionRole::SolidInfill;
@@ -47,6 +49,8 @@ std::string gcode_extrusion_role_to_string(GCodeExtrusionRole role)
         case GCodeExtrusionRole::SupportMaterial              : return std::string("Support material");
         case GCodeExtrusionRole::SupportMaterialInterface     : return std::string("Support material interface");
         case GCodeExtrusionRole::WipeTower                    : return std::string("Wipe tower");
+        case GCodeExtrusionRole::FirstInternalPerimeter       : return std::string("First internal perimeter");
+        case GCodeExtrusionRole::SecondInternalPerimeter      : return std::string("Second internal perimeter");
         case GCodeExtrusionRole::Custom                       : return std::string("Custom");
         default                             : assert(false);
     }

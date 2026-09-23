@@ -360,7 +360,9 @@ bool PressureEqualizer::process_line(const char *line, const char *line_end, GCo
 
             if (m_current_extrusion_role == GCodeExtrusionRole::ExternalPerimeter) {
                 m_current_perimeter_index = 0;
-            } else if (m_current_extrusion_role == GCodeExtrusionRole::Perimeter) {
+            } else if (m_current_extrusion_role == GCodeExtrusionRole::Perimeter
+                    || m_current_extrusion_role == GCodeExtrusionRole::FirstInternalPerimeter
+                    || m_current_extrusion_role == GCodeExtrusionRole::SecondInternalPerimeter) {
                 auto internal_perimeter_it_range = boost::find_last(str_line, INTERNAL_PERIMETER_TAG);
                 if (!internal_perimeter_it_range.empty()) {
                     uint16_t    perimetr_index = 0;
@@ -841,7 +843,10 @@ void PressureEqualizer::push_line_to_output(const size_t line_idx, float new_fee
     feedrate_formatter.emit_string(std::string(EXTRUDE_SET_SPEED_TAG.data(), EXTRUDE_SET_SPEED_TAG.length()));
     if (line.extrusion_role == GCodeExtrusionRole::ExternalPerimeter) {
         feedrate_formatter.emit_string(std::string(EXTERNAL_PERIMETER_TAG.data(), EXTERNAL_PERIMETER_TAG.length()));
-    } else if (line.extrusion_role == GCodeExtrusionRole::Perimeter && line.perimeter_index.has_value()) {
+    } else if ((line.extrusion_role == GCodeExtrusionRole::Perimeter
+             || line.extrusion_role == GCodeExtrusionRole::FirstInternalPerimeter
+             || line.extrusion_role == GCodeExtrusionRole::SecondInternalPerimeter)
+            && line.perimeter_index.has_value()) {
         feedrate_formatter.emit_string(std::string(INTERNAL_PERIMETER_TAG.data(), INTERNAL_PERIMETER_TAG.length()) + std::to_string(*line.perimeter_index));
     }
 
