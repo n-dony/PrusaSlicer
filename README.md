@@ -5,8 +5,9 @@
 
 This fork adds first/second internal perimeter as distinct roles (their own speed,
 acceleration, and reordering controls), an optional per-role temperature offset system,
-and additional perimeter print-order options (swap first internal with external,
-reverse internal perimeters from a configurable depth).
+additional perimeter print-order options (swap first internal with external, reverse
+internal perimeters from a configurable depth), a two-pass bridge mode (foundation pass
++ final pass at a configurable Z offset), and per-role perimeter combining across layers.
 
 You may want to check the [PrusaSlicer project page](https://www.prusa3d.com/prusaslicer/).
 Prebuilt Windows, OSX and Linux binaries are available through the [git releases page](https://github.com/prusa3d/PrusaSlicer/releases) or from the [Prusa3D downloads page](https://www.prusa3d.com/drivers/). There are also [3rd party Linux builds available](https://github.com/prusa3d/PrusaSlicer/wiki/PrusaSlicer-on-Linux---binary-distributions).
