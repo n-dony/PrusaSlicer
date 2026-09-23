@@ -2,6 +2,12 @@
 
 # PrusaSlicer
 
+This fork adds first/second internal perimeter as distinct roles (their own speed,
+acceleration, and reordering controls), an optional per-role temperature offset system,
+additional perimeter print-order options (swap first internal with external, reverse
+internal perimeters from a configurable depth), a two-pass bridge mode (foundation pass
++ final pass at a configurable Z offset), and per-role perimeter combining across layers.
+
 PrusaSlicer enables you to take your 3D models, generate 3D printing instructions and send them to your 3D printer. It supports both FDM 3D printers and mSLA 3D printers. It is developed by [Prusa Research](https://www.prusa3d.com/) and apart from Prusa printers it supports machines from a wide variety of manufacturers.
 
 PrusaSlicer is originally based on [Slic3r](https://github.com/Slic3r/Slic3r) by Alessandro Ranellucci and the RepRap community.
