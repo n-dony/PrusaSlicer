@@ -298,22 +298,35 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
                 std::swap(group[positions[lo]], group[positions[hi - 1]]);
         }
 
-        // "Groove injection": print the first internal perimeter last within its group, after everything
-        // else including the external perimeter, instead of immediately after it.
+        // "Groove injection": print the first internal perimeter adjacent to the external perimeter.
+        // inset_idx (physical wall slot) is used rather than depth (graph distance) so that the
+        // loop repositioned here is exactly the one carrying the FirstInternalPerimeter role and
+        // its associated speed/acceleration settings. In thin or branching regions depth != inset_idx,
+        // and using depth would reorder a loop that does not have that role.
+        //
+        // Contours and holes differ in natural print direction:
+        //   Contours: DFS order is outside-in; external (inset_idx==0) is first.
+        //             → move inset_idx==1 to the END so it prints right after ext (which is last
+        //               in inside-out mode) or after all deeper walls (outside-in mode).
+        //   Holes (outside-in, external_perimeters_first=true): DFS order is also outside-in,
+        //             external is first. Moving inset_idx==1 to the END puts it far from ext.
+        //             → move inset_idx==1 to the FRONT so it prints immediately before ext.
+        //   Holes (inside-out, external_perimeters_first=false): after std::reverse, ext is last.
+        //             Moving inset_idx==1 to the END puts it right after ext — correct.
+        //             → same END behaviour as contours.
         if (swap_first_int_w_ext_perimeter) {
-            // stable_partition leaves the inset_idx==1 (false-predicate) items as a contiguous
-            // block at the end, in their original relative order -- exactly "moved to print last".
-            // This is correct for both directions: the last slot of the group is the last thing
-            // printed, whether the group runs outside-in or inside-out.
-            //
-            // inset_idx (physical wall slot) is used rather than depth (graph distance) so that
-            // the loop deferred here is exactly the loop that carries the FirstInternalPerimeter
-            // role and its associated speed/acceleration settings. In thin or branching regions
-            // depth != inset_idx, and using depth would reorder a loop that does not have that
-            // role, causing a mismatch between print order and the visual/speed assignments.
-            std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
-                return p->inset_idx != 1;
-            });
+            const bool is_hole = !grouped_extrusions.back().external_perimeter_extrusion->is_contour();
+            if (is_hole && external_perimeters_first) {
+                // Hole outside-in: inset_idx==1 moves to FRONT, printing just before ext.
+                std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
+                    return p->inset_idx == 1;
+                });
+            } else {
+                // Contour (any direction) or hole inside-out: inset_idx==1 moves to END.
+                std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
+                    return p->inset_idx != 1;
+                });
+            }
         }
     }
 
