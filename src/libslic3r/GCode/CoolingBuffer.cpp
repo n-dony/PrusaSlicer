@@ -563,7 +563,7 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, int object_layer_count)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush)
 {
     // Cache the input G-code.
     if (m_gcode.empty())
@@ -576,13 +576,11 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
         // This is either an object layer or the very last print layer. Calculate cool down over the collected support layers
         // and one object layer.
         std::vector<PerExtruderAdjustments> per_extruder_adjustments = this->parse_layer_gcode(m_gcode, m_current_pos);
-        // When combine_perimeters groups N physical layers, raise the minimum-layer-time threshold
-        // to N × T so that the combined group's total print time satisfies cooling for all N layers.
-        if (object_layer_count > 1)
-            for (auto &adj : per_extruder_adjustments)
-                adj.slowdown_below_layer_time *= float(object_layer_count);
+        // For combine_perimeters/combine_infill groups, m_gcode already contains all N physical
+        // layers concatenated. parse_layer_gcode returns their combined time, so calculate_layer_slowdown
+        // compares the whole group's time against T — no threshold scaling needed.
         float layer_time_stretched = this->calculate_layer_slowdown(per_extruder_adjustments);
-        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments, object_layer_count);
+        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments);
         m_gcode.clear();
     }
     return out;
@@ -1129,10 +1127,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
     // Total time of this layer after slow down, used to control the fan.
     float                                   layer_time,
     // Per extruder list of G-code lines and their cool down attributes.
-    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments,
-    // Number of object layers accumulated in this flush group (combine_perimeters N-layer groups).
-    // Fan speed thresholds are scaled by this factor so the group is evaluated as N individual layers.
-    int                                     object_layer_count)
+    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments)
 {
     // First sort the adjustment lines by of multiple extruders by their position in the source G-code.
     std::vector<const CoolingLine*> lines;
@@ -1151,7 +1146,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
     new_gcode.reserve(gcode.size() * 2);
     bool bridge_fan_control = false;
     int  bridge_fan_speed   = 0;
-    auto change_extruder_set_fan = [this, layer_id, layer_time, object_layer_count, &new_gcode, &bridge_fan_control, &bridge_fan_speed](const int requested_fan_speed = -1) {
+    auto change_extruder_set_fan = [this, layer_id, layer_time, &new_gcode, &bridge_fan_control, &bridge_fan_speed](const int requested_fan_speed = -1) {
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_current_extruder)
         const int min_fan_speed            = EXTRUDER_CONFIG(min_fan_speed);
         // Is the fan speed ramp enabled?
@@ -1174,10 +1169,8 @@ std::string CoolingBuffer::apply_layer_cooldown(
         }
         if (int(layer_id) >= disable_fan_first_layers) {
             int   max_fan_speed             = EXTRUDER_CONFIG(max_fan_speed);
-            // For N combined layers the group's total time is compared against N×T so that the fan
-            // decision mirrors what would happen if each layer were evaluated individually.
-            float slowdown_below_layer_time = float(EXTRUDER_CONFIG(slowdown_below_layer_time)) * float(object_layer_count);
-            float fan_below_layer_time      = float(EXTRUDER_CONFIG(fan_below_layer_time))      * float(object_layer_count);
+            float slowdown_below_layer_time = float(EXTRUDER_CONFIG(slowdown_below_layer_time));
+            float fan_below_layer_time      = float(EXTRUDER_CONFIG(fan_below_layer_time));
             if (EXTRUDER_CONFIG(cooling)) {
                 if (layer_time < slowdown_below_layer_time) {
                     // Layer time very short. Enable the fan to a full throttle.

@@ -90,9 +90,6 @@ struct LayerResult {
     // Is indicating if this LayerResult should be processed, or it is just inserted artificial LayerResult.
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
-    // Number of object layers accumulated in this flush group (used to scale the minimum-layer-time
-    // threshold: N combined layers share an N×T time budget instead of per-layer T).
-    int         cooling_buffer_object_count { 1 };
 
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, true}; }
 };
@@ -461,9 +458,6 @@ private:
 
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
-    // Number of consecutive object layers without perimeters accumulated in the cooling buffer.
-    // Counts the current combine group; reset to 1 after each flush.
-    int                                 m_cooling_combine_count { 1 };
     std::unique_ptr<SpiralVase>         m_spiral_vase;
     // Tracks the nozzle temperature this system believes the printer is currently at, so repeated
     // extrusions at the same effective temperature don't each re-emit a redundant M104/M109.
