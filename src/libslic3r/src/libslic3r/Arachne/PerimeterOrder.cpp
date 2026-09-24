@@ -294,7 +294,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
                 // Use inset_idx (physical wall slot) rather than depth (graph distance) so that
                 // the threshold matches the FirstInternalPerimeter/SecondInternalPerimeter role
                 // assignments in PerimeterGenerator.cpp, which are also inset_idx-based.
-                if (static_cast<int>(group[idx]->inset_idx) >= reverse_internal_perimeters_at)
+                if (static_cast<int>(group[idx]->extrusion.inset_idx) >= reverse_internal_perimeters_at)
                     positions.emplace_back(idx);
 
             for (size_t lo = 0, hi = positions.size(); lo + 1 < hi; ++lo, --hi)
@@ -315,7 +315,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
             // depth != inset_idx, and using depth would reorder a loop that does not have that
             // role, causing a mismatch between print order and the visual/speed assignments.
             std::stable_partition(group.begin(), group.end(), [](const PerimeterExtrusion *p) {
-                return p->inset_idx != 1;
+                return p->extrusion.inset_idx != 1;
             });
         }
     }
