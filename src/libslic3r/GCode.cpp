@@ -2976,15 +2976,18 @@ LayerResult GCodeGenerator::process_layer(
 
     result.gcode = std::move(gcode);
 
-    // When combine_perimeters groups N physical layers, only the final layer in each group has
-    // perimeter extrusions. Thin layers (infill only) are deferred so the cooling buffer can
-    // evaluate the full group time against N × slowdown_below_layer_time.
-    bool has_perimeters = !object_layer;
+    // When combine_perimeters or infill_every_layers groups N physical layers, thin layers are
+    // missing either perimeters (perimeter combining) or fills (infill combining).  Defer the
+    // cooling buffer flush for such layers so the full group time is evaluated together against
+    // N × slowdown_below_layer_time.  A layer is considered "full" only when at least one region
+    // has BOTH perimeters and fills; anything else is a thin layer in a combine group.
+    bool has_full_extrusions = !object_layer;
     if (object_layer)
         for (const LayerRegion *region : object_layer->regions())
-            if (!region->perimeters().empty()) { has_perimeters = true; break; }
+            if (!region->perimeters().empty() && !region->fills().empty())
+                { has_full_extrusions = true; break; }
 
-    const bool do_flush = has_perimeters || raft_layer || last_layer;
+    const bool do_flush = has_full_extrusions || raft_layer || last_layer;
     result.cooling_buffer_flush = do_flush;
     if (do_flush) {
         result.cooling_buffer_object_count = m_cooling_combine_count;
