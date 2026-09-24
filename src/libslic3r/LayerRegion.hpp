@@ -148,6 +148,13 @@ public:
     // Is there any valid extrusion assigned to this LayerRegion?
     bool    has_extrusions() const { return ! this->perimeters().empty() || ! this->fills().empty(); }
 
+    // True when combine_perimeters() voided internal perimeter paths of this region because they
+    // will be printed merged at combined height on the group-top layer above this one.
+    bool    perimeters_moved_to_upper_layer() const { return m_perimeters_moved_to_upper_layer; }
+
+    // True when combine_infill() voided internal infill of this region because it will be
+    // printed merged at combined height on the group-top layer above this one.
+    bool    infill_moved_to_upper_layer() const { return m_infill_moved_to_upper_layer; }
 
 protected:
     friend class Layer;
@@ -208,6 +215,13 @@ private:
     // (this collection contains only ExtrusionEntityCollection objects)
     ExtrusionEntityCollection   m_fills;
 
+    // Set by PrintObject::combine_perimeters() on the lower (thin) layers of each combine group.
+    // Reset to false at the top of combine_perimeters() before each run.
+    bool    m_perimeters_moved_to_upper_layer { false };
+
+    // Set by PrintObject::combine_infill() on the lower (thin) layers of each infill combine group.
+    // Reset to false at the top of combine_infill() before each run.
+    bool    m_infill_moved_to_upper_layer { false };
 
     // collection of expolygons representing the bridged areas (thus not
     // needing support material)

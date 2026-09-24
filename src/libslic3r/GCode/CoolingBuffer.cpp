@@ -576,6 +576,11 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
         // This is either an object layer or the very last print layer. Calculate cool down over the collected support layers
         // and one object layer.
         std::vector<PerExtruderAdjustments> per_extruder_adjustments = this->parse_layer_gcode(m_gcode, m_current_pos);
+        // When combine_perimeters groups N physical layers, raise the minimum-layer-time threshold
+        // to N × T so that the combined group's total print time satisfies cooling for all N layers.
+        if (object_layer_count > 1)
+            for (auto &adj : per_extruder_adjustments)
+                adj.slowdown_below_layer_time *= float(object_layer_count);
         float layer_time_stretched = this->calculate_layer_slowdown(per_extruder_adjustments);
         out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments, object_layer_count);
         m_gcode.clear();
@@ -1169,8 +1174,10 @@ std::string CoolingBuffer::apply_layer_cooldown(
         }
         if (int(layer_id) >= disable_fan_first_layers) {
             int   max_fan_speed             = EXTRUDER_CONFIG(max_fan_speed);
-            float slowdown_below_layer_time = float(EXTRUDER_CONFIG(slowdown_below_layer_time));
-            float fan_below_layer_time      = float(EXTRUDER_CONFIG(fan_below_layer_time));
+            // For N combined layers the group's total time is compared against N×T so that the fan
+            // decision mirrors what would happen if each layer were evaluated individually.
+            float slowdown_below_layer_time = float(EXTRUDER_CONFIG(slowdown_below_layer_time)) * float(object_layer_count);
+            float fan_below_layer_time      = float(EXTRUDER_CONFIG(fan_below_layer_time))      * float(object_layer_count);
             if (EXTRUDER_CONFIG(cooling)) {
                 if (layer_time < slowdown_below_layer_time) {
                     // Layer time very short. Enable the fan to a full throttle.
