@@ -2980,12 +2980,14 @@ LayerResult GCodeGenerator::process_layer(
     // missing either perimeters (perimeter combining) or fills (infill combining).  Defer the
     // cooling buffer flush for such layers so the full group time is evaluated together against
     // N × slowdown_below_layer_time.  A layer is considered "full" only when at least one region
-    // has BOTH perimeters and fills; anything else is a thin layer in a combine group.
-    bool has_full_extrusions = !object_layer;
-    if (object_layer)
-        for (const LayerRegion *region : object_layer->regions())
-            if (!region->perimeters().empty() && !region->fills().empty())
-                { has_full_extrusions = true; break; }
+    // in any object at this Z has BOTH perimeters and fills; otherwise it is a thin combine layer.
+    // Support-only layers (no object layer) retain original behavior: defer unless raft or last.
+    bool has_full_extrusions = false;
+    for (const ObjectLayerToPrint &l : layers)
+        if (l.object_layer && !has_full_extrusions)
+            for (const LayerRegion *region : l.object_layer->regions())
+                if (!region->perimeters().empty() && !region->fills().empty())
+                    { has_full_extrusions = true; break; }
 
     const bool do_flush = has_full_extrusions || raft_layer || last_layer;
     result.cooling_buffer_flush = do_flush;
