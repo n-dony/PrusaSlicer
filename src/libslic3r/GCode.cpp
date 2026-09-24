@@ -2988,7 +2988,9 @@ LayerResult GCodeGenerator::process_layer(
     for (const ObjectLayerToPrint &l : layers)
         if (l.object_layer &&
             std::none_of(l.object_layer->regions().begin(), l.object_layer->regions().end(),
-                         [](const LayerRegion *r) { return r->perimeters_moved_to_upper_layer(); })) {
+                         [](const LayerRegion *r) {
+                             return r->perimeters_moved_to_upper_layer() || r->infill_moved_to_upper_layer();
+                         })) {
             combine_sub_layer = false;
             break;
         }
