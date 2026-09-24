@@ -279,6 +279,12 @@ enum class CoolingSlowdownLogicType
     Proportional,
 };
 
+enum class CoolingCombineLogicType
+{
+    GroupTime,       // (default) whole combine group vs T — Alt A
+    TopLayerCeiling, // per-feature ceiling from top layer propagated to sub-layers
+};
+
 enum class ToolChangeOrderingType
 {
     Optimized,
@@ -317,6 +323,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PerimeterGeneratorType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TopOnePerimeterType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(EnsureVerticalShellThickness)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CoolingSlowdownLogicType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CoolingCombineLogicType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ToolChangeOrderingType)
 
 #undef CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS
@@ -998,6 +1005,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloats,             colorprint_heights))
     ((ConfigOptionBools,              cooling))
     ((ConfigOptionEnums<CoolingSlowdownLogicType>, cooling_slowdown_logic))
+    ((ConfigOptionEnums<CoolingCombineLogicType>,  cooling_combine_logic))
     ((ConfigOptionFloats,             cooling_perimeter_transition_distance))
     ((ConfigOptionFloat,              default_acceleration))
     ((ConfigOptionInts,               disable_fan_first_layers))

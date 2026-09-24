@@ -2289,6 +2289,7 @@ void TabFilament::build()
         optgroup->append_single_option_line("fan_always_on");
         optgroup->append_single_option_line("cooling");
         optgroup->append_single_option_line("cooling_slowdown_logic");
+        optgroup->append_single_option_line("cooling_combine_logic");
         optgroup->append_single_option_line("cooling_perimeter_transition_distance");
 
         line = { "", "" };
@@ -2495,7 +2496,7 @@ void TabFilament::toggle_options()
         bool cooling = m_config->opt_bool("cooling", 0);
         bool fan_always_on = cooling || m_config->opt_bool("fan_always_on", 0);
 
-        for (auto el : { "max_fan_speed", "fan_below_layer_time", "slowdown_below_layer_time", "min_print_speed", "cooling_slowdown_logic" })
+        for (auto el : { "max_fan_speed", "fan_below_layer_time", "slowdown_below_layer_time", "min_print_speed", "cooling_slowdown_logic", "cooling_combine_logic" })
             toggle_option(el, cooling);
 
         for (auto el : { "min_fan_speed", "disable_fan_first_layers", "full_fan_speed_layer" })
