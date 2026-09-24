@@ -87,11 +87,14 @@ struct LayerResult {
     bool        spiral_vase_enable { false };
     // Should the cooling buffer content be flushed at the end of this layer?
     bool        cooling_buffer_flush { false };
+    // True when this is a combine_perimeters/combine_infill sub-layer (not the group-top layer).
+    // Tells CoolingBuffer to record the sub-layer boundary in m_sub_layers_end for TopLayerCeiling mode.
+    bool        cooling_buffer_combine_sub_layer { false };
     // Is indicating if this LayerResult should be processed, or it is just inserted artificial LayerResult.
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
 
-    static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, true}; }
+    static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, false, true}; }
 };
 
 namespace GCode {
