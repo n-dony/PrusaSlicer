@@ -461,6 +461,9 @@ private:
 
     // This needs to be populated during the layer processing!
     std::unique_ptr<CoolingBuffer>      m_cooling_buffer;
+    // Number of consecutive object layers without perimeters accumulated in the cooling buffer.
+    // Counts the current combine group; reset to 1 after each flush.
+    int                                 m_cooling_combine_count { 1 };
     std::unique_ptr<SpiralVase>         m_spiral_vase;
     // Tracks the nozzle temperature this system believes the printer is currently at, so repeated
     // extrusions at the same effective temperature don't each re-emit a redundant M104/M109.
