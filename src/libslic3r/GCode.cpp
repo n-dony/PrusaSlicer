@@ -2976,20 +2976,24 @@ LayerResult GCodeGenerator::process_layer(
 
     result.gcode = std::move(gcode);
 
-    // When combine_perimeters or infill_every_layers groups N physical layers, thin layers are
-    // missing either perimeters (perimeter combining) or fills (infill combining).  Defer the
-    // cooling buffer flush for such layers so the full group time is evaluated together against
-    // N × slowdown_below_layer_time.  A layer is considered "full" only when at least one region
-    // in any object at this Z has BOTH perimeters and fills; otherwise it is a thin combine layer.
+    // combine_perimeters() voids internal perimeter paths on the lower (thin) layers of each
+    // N-layer group and merges them at combined height onto the group-top layer, which prints last.
+    // Those thin layers are marked via LayerRegion::m_perimeters_moved_to_upper_layer.
+    // Defer the CoolingBuffer flush when EVERY object layer at this print_z is a thin sub-layer,
+    // so the whole group is evaluated together against N × slowdown_below_layer_time.
+    // Conservative multi-object rule: flush if ANY object has non-thinned regions — a wrong
+    // deferral under-cools; a wrong flush only over-slows.
     // Support-only layers (no object layer) retain original behavior: defer unless raft or last.
-    bool has_full_extrusions = false;
+    bool combine_sub_layer = (object_layer != nullptr);
     for (const ObjectLayerToPrint &l : layers)
-        if (l.object_layer && !has_full_extrusions)
-            for (const LayerRegion *region : l.object_layer->regions())
-                if (!region->perimeters().empty() && !region->fills().empty())
-                    { has_full_extrusions = true; break; }
+        if (l.object_layer &&
+            std::none_of(l.object_layer->regions().begin(), l.object_layer->regions().end(),
+                         [](const LayerRegion *r) { return r->perimeters_moved_to_upper_layer(); })) {
+            combine_sub_layer = false;
+            break;
+        }
 
-    const bool do_flush = has_full_extrusions || raft_layer || last_layer;
+    const bool do_flush = (object_layer && !combine_sub_layer) || raft_layer || last_layer;
     result.cooling_buffer_flush = do_flush;
     if (do_flush) {
         result.cooling_buffer_object_count = m_cooling_combine_count;
