@@ -3136,11 +3136,6 @@ void PrintObject::discover_horizontal_shells()
 // fill_surfaces but we only turn them into VOID surfaces, thus preserving the boundaries.
 void PrintObject::combine_infill()
 {
-    // Reset flags from any previous run.
-    for (auto *layer : m_layers)
-        for (auto *region : layer->m_regions)
-            region->m_infill_moved_to_upper_layer = false;
-
     // Work on each region separately.
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
         const PrintRegion &region                        = this->printing_region(region_id);
@@ -3246,11 +3241,10 @@ void PrintObject::combine_infill()
                     templ.thickness_layers = (unsigned short)layerms.size();
                     layerm->m_fill_surfaces.append(intersection, templ);
                 } else {
-                    // Save void surfaces and mark this thin layer for CoolingBuffer deferral.
+                    // Save void surfaces.
                     layerm->m_fill_surfaces.append(
                         intersection_ex(internal, intersection_with_clearance),
                         stInternalVoid);
-                    layerm->m_infill_moved_to_upper_layer = true;
                 }
             }
         }
@@ -3274,12 +3268,6 @@ void PrintObject::combine_perimeters()
     // Nothing to combine when there is fewer than 2 layers.
     if (m_layers.size() < 2)
         return;
-
-    // Reset the flag on every LayerRegion before re-running — Layer objects survive
-    // posPerimeters invalidation, so a stale flag from the previous run must be cleared.
-    for (Layer *layer : m_layers)
-        for (LayerRegion *layerm : layer->m_regions)
-            layerm->m_perimeters_moved_to_upper_layer = false;
 
     struct RoleSpec {
         ExtrusionRole role;
@@ -3494,7 +3482,6 @@ void PrintObject::combine_perimeters()
                             return;
                         path.polyline = Polyline{};
                     });
-                    sub_rm->m_perimeters_moved_to_upper_layer = true;
                 }
 
                 // Remove empty paths from loops/multipaths, then remove now-empty
