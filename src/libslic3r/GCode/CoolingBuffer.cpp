@@ -13,6 +13,7 @@
 #include <boost/log/trivial.hpp>
 #include <algorithm>
 #include <charconv>
+#include <unordered_map>
 #include <cmath>
 #include <iterator>
 #include <string_view>
@@ -571,17 +572,121 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
     else
         m_gcode += gcode;
 
+    // Track where sub-layers end in m_gcode (updated after each non-flush call so that
+    // on the flush call m_sub_layers_end marks where the top layer begins).
+    if (!flush)
+        m_sub_layers_end = m_gcode.size();
+
     std::string out;
     if (flush) {
-        // This is either an object layer or the very last print layer. Calculate cool down over the collected support layers
-        // and one object layer.
-        std::vector<PerExtruderAdjustments> per_extruder_adjustments = this->parse_layer_gcode(m_gcode, m_current_pos);
-        // For combine_perimeters/combine_infill groups, m_gcode already contains all N physical
-        // layers concatenated. parse_layer_gcode returns their combined time, so calculate_layer_slowdown
-        // compares the whole group's time against T — no threshold scaling needed.
-        float layer_time_stretched = this->calculate_layer_slowdown(per_extruder_adjustments);
-        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments);
+        // Parse the full buffered G-code (sub-layers + top layer) in one pass so that the
+        // extruder-tracking state in parse_layer_gcode stays consistent across tool changes.
+        std::vector<PerExtruderAdjustments> all_adj = this->parse_layer_gcode(m_gcode, m_current_pos);
+
+        // Determine which combine cooling mode the first printing extruder requests.
+        CoolingCombineLogicType combine_logic = CoolingCombineLogicType::GroupTime;
+        if (!m_extruder_ids.empty())
+            combine_logic = m_config.cooling_combine_logic.get_at(m_extruder_ids[0]);
+
+        float layer_time_stretched;
+
+        if (combine_logic == CoolingCombineLogicType::TopLayerCeiling && m_sub_layers_end > 0) {
+            // === TopLayerCeiling mode ===
+            // Calculate the slowdown for the top layer only, extract per-feature-class speed
+            // ceilings, then propagate those ceilings to the sub-layer lines.
+
+            // 1. Build a top-layer-only copy of adjustments (lines whose byte offset in m_gcode
+            //    is >= m_sub_layers_end belong to the top layer).
+            std::vector<PerExtruderAdjustments> top_adj = all_adj;
+            for (auto &adj : top_adj) {
+                auto sub_end = m_sub_layers_end; // capture for lambda
+                adj.lines.erase(std::remove_if(adj.lines.begin(), adj.lines.end(),
+                    [sub_end](const CoolingLine &l) { return l.line_start < sub_end; }),
+                    adj.lines.end());
+                adj.n_lines_adjustable = 0;
+                adj.time_non_adjustable = 0.f;
+                adj.time_maximum = 0.f;
+                adj.idx_line_begin = adj.idx_line_end = 0;
+            }
+
+            // 2. Run the standard slowdown on the top layer — it reaches exactly T.
+            this->calculate_layer_slowdown(top_adj);
+
+            // 3. Extract per-feature-class speed ceilings from slowed top-layer lines.
+            //    Ceiling = minimum feedrate among lines of a class that were actually slowed.
+            float ceil_ext       = FLT_MAX;
+            float ceil_first_int = FLT_MAX;
+            float ceil_int       = FLT_MAX;
+            float ceil_other     = FLT_MAX;
+            for (const auto &adj : top_adj) {
+                for (const auto &line : adj.lines) {
+                    if (!line.slowdown || !(line.type & CoolingLine::TYPE_ADJUSTABLE)) continue;
+                    float f = line.feedrate;
+                    if      (line.type & CoolingLine::TYPE_EXTERNAL_PERIMETER)      ceil_ext       = std::min(ceil_ext,       f);
+                    else if (line.type & CoolingLine::TYPE_FIRST_INTERNAL_PERIMETER) ceil_first_int = std::min(ceil_first_int, f);
+                    else if (line.type & CoolingLine::TYPE_INTERNAL_PERIMETER)       ceil_int       = std::min(ceil_int,       f);
+                    else                                                              ceil_other     = std::min(ceil_other,     f);
+                }
+            }
+
+            // 4. Build a lookup: line_start → (feedrate, adjustable_time) for top-layer lines
+            //    that were slowed. Used to sync the slowdown back to all_adj.
+            std::unordered_map<size_t, std::pair<float, float>> top_results;
+            for (const auto &adj : top_adj)
+                for (const auto &line : adj.lines)
+                    if (line.slowdown)
+                        top_results.emplace(line.line_start, std::make_pair(line.feedrate, line.adjustable_time));
+
+            // 5. Apply results to all_adj: sync top-layer slowdown, apply ceilings to sub-layers.
+            for (auto &adj : all_adj) {
+                for (auto &line : adj.lines) {
+                    if (!(line.type & CoolingLine::TYPE_ADJUSTABLE) || line.adjustable_length <= 0.f)
+                        continue;
+
+                    if (line.line_start >= m_sub_layers_end) {
+                        // Top-layer line — sync the slowdown computed in top_adj.
+                        auto it = top_results.find(line.line_start);
+                        if (it != top_results.end()) {
+                            line.feedrate        = it->second.first;
+                            line.adjustable_time = it->second.second;
+                            line.slowdown        = true;
+                        }
+                    } else {
+                        // Sub-layer line — apply the ceiling from the top-layer slowdown.
+                        float ceiling = FLT_MAX;
+                        if      (line.type & CoolingLine::TYPE_EXTERNAL_PERIMETER)       ceiling = ceil_ext;
+                        else if (line.type & CoolingLine::TYPE_FIRST_INTERNAL_PERIMETER) ceiling = ceil_first_int;
+                        else if (line.type & CoolingLine::TYPE_INTERNAL_PERIMETER)       ceiling = ceil_int;
+                        else                                                              ceiling = ceil_other;
+
+                        if (ceiling < line.feedrate) {
+                            float effective = std::max(ceiling, adj.min_print_speed);
+                            if (effective < line.feedrate) {
+                                line.adjustable_time *= line.feedrate / effective;
+                                line.feedrate         = effective;
+                                line.slowdown         = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 6. Sum total group time for fan control (same as GroupTime — one fan level for group).
+            layer_time_stretched = 0.f;
+            for (const auto &adj : all_adj)
+                layer_time_stretched += adj.elapsed_time_total();
+
+        } else {
+            // === GroupTime mode (default) ===
+            // For combine groups, m_gcode contains all N physical layers concatenated.
+            // parse_layer_gcode returns their combined time, so calculate_layer_slowdown
+            // compares the whole group's time against T — no threshold scaling needed.
+            layer_time_stretched = this->calculate_layer_slowdown(all_adj);
+        }
+
+        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, all_adj);
         m_gcode.clear();
+        m_sub_layers_end = 0;
     }
     return out;
 }

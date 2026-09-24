@@ -366,6 +366,12 @@ static const t_config_enum_values s_keys_map_CoolingSlowdownLogicType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(CoolingSlowdownLogicType)
 
+static const t_config_enum_values s_keys_map_CoolingCombineLogicType {
+    { "group_time",         int(CoolingCombineLogicType::GroupTime)       },
+    { "top_layer_ceiling",  int(CoolingCombineLogicType::TopLayerCeiling) },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(CoolingCombineLogicType)
+
 static t_config_enum_values s_keys_map_ToolChangeOrderingType {
         { "optimized", int(ToolChangeOrderingType::Optimized) },
         { "cyclic",    int(ToolChangeOrderingType::Cyclic) }
@@ -1011,6 +1017,19 @@ void PrintConfigDef::init_fff_params()
         { "consistent_surface", L("Consistent surface") },
     });
     def->set_default_value(new ConfigOptionEnums<CoolingSlowdownLogicType>{ CoolingSlowdownLogicType::UniformCooling });
+
+    def = this->add("cooling_combine_logic", coEnums);
+    def->label = L("Combine layers cooling logic");
+    def->tooltip = L("Controls how the cooling buffer handles combine_perimeters and combine_infill layer groups. "
+                     "'Group time' (default) evaluates the whole N-layer group's total print time against the minimum layer time threshold — "
+                     "no slowdown fires if the group total already exceeds the threshold. "
+                     "'Top layer ceiling' calculates the per-feature speed ceiling from the top (combined) layer alone and propagates it to sub-layers, "
+                     "ensuring the top layer reaches exactly the minimum layer time and sub-layers run at the same per-feature speed.");
+    def->set_enum<CoolingCombineLogicType>({
+        { "group_time",        L("Group time")        },
+        { "top_layer_ceiling", L("Top layer ceiling") },
+    });
+    def->set_default_value(new ConfigOptionEnums<CoolingCombineLogicType>{ CoolingCombineLogicType::GroupTime });
 
     def = this->add("cooling_perimeter_transition_distance", coFloats);
     def->label = L("Perimeter transition distance");

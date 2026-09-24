@@ -56,6 +56,10 @@ private:
 
     // G-code snippet cached for the support layers preceding an object layer.
     std::string                 m_gcode;
+    // Byte offset in m_gcode where the top layer starts (everything before is sub-layers).
+    // Set by process_layer when flush=false (sub-layer); reset to 0 after each flush.
+    // Used by the TopLayerCeiling combine-group cooling mode.
+    size_t                      m_sub_layers_end { 0 };
     // Internal data.
     std::vector<char>           m_axis;
     enum AxisIdx : int {
