@@ -3269,6 +3269,12 @@ void PrintObject::combine_perimeters()
     if (m_layers.size() < 2)
         return;
 
+    // Reset the flag on every LayerRegion before re-running — Layer objects survive
+    // posPerimeters invalidation, so a stale flag from the previous run must be cleared.
+    for (Layer *layer : m_layers)
+        for (LayerRegion *layerm : layer->m_regions)
+            layerm->m_perimeters_moved_to_upper_layer = false;
+
     struct RoleSpec {
         ExtrusionRole role;
         int           every_layers;
@@ -3473,12 +3479,16 @@ void PrintObject::combine_perimeters()
                 // path carries no geometry; the role is intentionally preserved so
                 // role-gated consumers (e.g. split_with_seam in GCode.cpp) see a
                 // valid perimeter role and do not perform an out-of-bounds access.
+                // Mark the layer region so GCodeGenerator::process_layer() can defer
+                // the CoolingBuffer flush and evaluate the group under N×T.
                 for (size_t i = group_start; i < top_idx; ++i) {
-                    walk(m_layers[i]->m_regions[region_id], [&](ExtrusionPath &path) {
+                    LayerRegion *sub_rm = m_layers[i]->m_regions[region_id];
+                    walk(sub_rm, [&](ExtrusionPath &path) {
                         if (!role_matches(path.role()))
                             return;
                         path.polyline = Polyline{};
                     });
+                    sub_rm->m_perimeters_moved_to_upper_layer = true;
                 }
 
                 // Remove empty paths from loops/multipaths, then remove now-empty
