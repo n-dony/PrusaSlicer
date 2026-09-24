@@ -1658,7 +1658,7 @@ void GCodeGenerator::process_layers(
                 return in;
             spiral_vase->enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, false};
+            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false};
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -1669,7 +1669,7 @@ void GCodeGenerator::process_layers(
              if (in.nop_layer_result)
                 return in.gcode;
 
-             return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+             return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer);
         });
     const auto find_replace = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [find_replace = this->m_find_replace.get()](std::string s) -> std::string {
@@ -1752,7 +1752,7 @@ void GCodeGenerator::process_layers(
                 return in;
             spiral_vase->enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, false};
+            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false};
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -1762,7 +1762,7 @@ void GCodeGenerator::process_layers(
         [cooling_buffer = this->m_cooling_buffer.get()](LayerResult in)->std::string {
             if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+            return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer);
         });
     const auto find_replace = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [find_replace = this->m_find_replace.get()](std::string s) -> std::string {
@@ -2979,7 +2979,7 @@ LayerResult GCodeGenerator::process_layer(
     // N-layer group and merges them at combined height onto the group-top layer, which prints last.
     // Those thin layers are marked via LayerRegion::m_perimeters_moved_to_upper_layer.
     // Defer the CoolingBuffer flush when EVERY object layer at this print_z is a thin sub-layer,
-    // so the whole group is evaluated together against N × slowdown_below_layer_time.
+    // so the whole group is evaluated together as one unit against slowdown_below_layer_time.
     // Conservative multi-object rule: flush if ANY object has non-thinned regions — a wrong
     // deferral under-cools; a wrong flush only over-slows.
     // Support-only layers (no object layer) retain original behavior: defer unless raft or last.
@@ -2996,6 +2996,7 @@ LayerResult GCodeGenerator::process_layer(
 
     const bool do_flush = (object_layer && !combine_sub_layer) || raft_layer || last_layer;
     result.cooling_buffer_flush = do_flush;
+    result.cooling_buffer_combine_sub_layer = combine_sub_layer && !do_flush;
 
     return result;
 }

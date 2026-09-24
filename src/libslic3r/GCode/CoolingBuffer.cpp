@@ -564,7 +564,7 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer)
 {
     // Cache the input G-code.
     if (m_gcode.empty())
@@ -572,9 +572,11 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
     else
         m_gcode += gcode;
 
-    // Track where sub-layers end in m_gcode (updated after each non-flush call so that
-    // on the flush call m_sub_layers_end marks where the top layer begins).
-    if (!flush)
+    // Track where combine sub-layers end in m_gcode so that on the flush call
+    // m_sub_layers_end marks where the top layer begins (TopLayerCeiling mode).
+    // Only set for actual combine_perimeters/combine_infill sub-layers — not for
+    // support-only deferred layers, which must not trigger the ceiling-propagation path.
+    if (!flush && is_combine_sub_layer)
         m_sub_layers_end = m_gcode.size();
 
     std::string out;
@@ -629,13 +631,26 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
                 }
             }
 
-            // 4. Build a lookup: line_start → (feedrate, adjustable_time) for top-layer lines
-            //    that were slowed. Used to sync the slowdown back to all_adj.
-            std::unordered_map<size_t, std::pair<float, float>> top_results;
+            // 4. Build a lookup: line_start → full CoolingLine state for ALL top-layer lines.
+            //    Syncs back both the slowdown results and the non_adjustable_segments split
+            //    created by calculate_layer_slowdown (required for ConsistentSurface transition).
+            struct TopLineState {
+                float feedrate;
+                float adjustable_time;
+                float adjustable_length;
+                float non_adjustable_length;
+                float non_adjustable_time;
+                float adjustable_time_max;
+                bool  slowdown;
+            };
+            std::unordered_map<size_t, TopLineState> top_results;
             for (const auto &adj : top_adj)
                 for (const auto &line : adj.lines)
-                    if (line.slowdown)
-                        top_results.emplace(line.line_start, std::make_pair(line.feedrate, line.adjustable_time));
+                    top_results.emplace(line.line_start, TopLineState{
+                        line.feedrate, line.adjustable_time, line.adjustable_length,
+                        line.non_adjustable_length, line.non_adjustable_time,
+                        line.adjustable_time_max, line.slowdown
+                    });
 
             // 5. Apply results to all_adj: sync top-layer slowdown, apply ceilings to sub-layers.
             for (auto &adj : all_adj) {
@@ -644,12 +659,18 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
                         continue;
 
                     if (line.line_start >= m_sub_layers_end) {
-                        // Top-layer line — sync the slowdown computed in top_adj.
+                        // Top-layer line — sync all fields modified by calculate_layer_slowdown,
+                        // including the non_adjustable_segments split for ConsistentSurface.
                         auto it = top_results.find(line.line_start);
                         if (it != top_results.end()) {
-                            line.feedrate        = it->second.first;
-                            line.adjustable_time = it->second.second;
-                            line.slowdown        = true;
+                            const auto &s       = it->second;
+                            line.feedrate              = s.feedrate;
+                            line.adjustable_time       = s.adjustable_time;
+                            line.adjustable_length     = s.adjustable_length;
+                            line.non_adjustable_length = s.non_adjustable_length;
+                            line.non_adjustable_time   = s.non_adjustable_time;
+                            line.adjustable_time_max   = s.adjustable_time_max;
+                            line.slowdown              = s.slowdown;
                         }
                     } else {
                         // Sub-layer line — apply the ceiling from the top-layer slowdown.
