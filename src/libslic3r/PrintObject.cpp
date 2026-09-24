@@ -3330,6 +3330,27 @@ void PrintObject::combine_perimeters()
                 combine[m_layers.size() - 1] = n;
             }
 
+            // Walk island EECs in a layer region's m_perimeters and apply action.
+            // Defined here (before Stage 2) so coverage-check lambdas can reference it.
+            auto walk = [&](LayerRegion *rm, auto &&action) {
+                for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                    auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
+                    if (!island)
+                        continue;
+                    for (ExtrusionEntity *child : island->entities) {
+                        if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
+                            for (ExtrusionPath &path : loop->paths)
+                                action(path);
+                        } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
+                            for (ExtrusionPath &path : mpath->paths)
+                                action(path);
+                        } else if (auto *path = dynamic_cast<ExtrusionPath *>(child)) {
+                            action(*path);
+                        }
+                    }
+                }
+            };
+
             // Stage 2: geometry check and apply.
             for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
                 m_print->throw_if_canceled();
@@ -3436,27 +3457,6 @@ void PrintObject::combine_perimeters()
                 float  ch    = float(H);
                 float  cw    = cflow.width();
                 double cmm3  = cflow.mm3_per_mm();
-
-                // Walk island EECs in a layer region's m_perimeters and apply action.
-                // m_perimeters.entities holds one ExtrusionEntityCollection* per island.
-                auto walk = [&](LayerRegion *rm, auto &&action) {
-                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
-                        auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
-                        if (!island)
-                            continue;
-                        for (ExtrusionEntity *child : island->entities) {
-                            if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
-                                for (ExtrusionPath &path : loop->paths)
-                                    action(path);
-                            } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
-                                for (ExtrusionPath &path : mpath->paths)
-                                    action(path);
-                            } else if (auto *path = dynamic_cast<ExtrusionPath *>(child)) {
-                                action(*path);
-                            }
-                        }
-                    }
-                };
 
                 // Scale matching paths on the group-top layer.
                 walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
