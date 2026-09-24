@@ -634,8 +634,11 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     }
 
                     if (do_two_pass) {
-                        const float pass_height = surface_fill.params.flow.height() * 0.5f;
-                        const double pass_mm3   = flow_mm3_per_mm * 0.5;
+                        // Use actual layer height for the pass height, not the bridge extrusion
+                        // height (which is the nozzle diameter for thick bridges).  Half-volume
+                        // split keeps the same total material as a single-pass bridge.
+                        const float  pass_height = float(params.layer_height) * 0.5f;
+                        const double pass_mm3    = flow_mm3_per_mm * 0.5;
 
                         // no_sort=true preserves pass order so the path chainer cannot interleave passes.
                         eec->no_sort = true;

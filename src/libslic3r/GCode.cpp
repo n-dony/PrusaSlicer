@@ -3497,12 +3497,12 @@ std::string GCodeGenerator::_extrude(
         const double z_adj = (*path_attr.pass_index == 0) ? -double(path_attr.height) : 0.;
         if (std::abs(z_adj - m_bridge_pass_z_offset) > EPSILON) {
             m_bridge_pass_z_offset = z_adj;
-            gcode += m_writer.travel_to_z(m_layer->print_z + z_adj, "bridge pass Z");
+            gcode += m_writer.travel_to_z(m_last_layer_z + z_adj, "bridge pass Z");
         }
     } else if (std::abs(m_bridge_pass_z_offset) > EPSILON) {
         // Leaving bridge passes — restore Z to normal layer Z.
         m_bridge_pass_z_offset = 0.;
-        gcode += m_writer.travel_to_z(m_layer->print_z, "restore Z after bridge passes");
+        gcode += m_writer.travel_to_z(m_last_layer_z, "restore Z after bridge passes");
     }
 
     if (!this->last_position) {
