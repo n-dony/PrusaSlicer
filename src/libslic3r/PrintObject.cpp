@@ -3136,6 +3136,11 @@ void PrintObject::discover_horizontal_shells()
 // fill_surfaces but we only turn them into VOID surfaces, thus preserving the boundaries.
 void PrintObject::combine_infill()
 {
+    // Reset flags from any previous run.
+    for (auto *layer : m_layers)
+        for (auto *region : layer->m_regions)
+            region->m_infill_moved_to_upper_layer = false;
+
     // Work on each region separately.
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
         const PrintRegion &region                        = this->printing_region(region_id);
@@ -3241,10 +3246,11 @@ void PrintObject::combine_infill()
                     templ.thickness_layers = (unsigned short)layerms.size();
                     layerm->m_fill_surfaces.append(intersection, templ);
                 } else {
-                    // Save void surfaces.
+                    // Save void surfaces and mark this thin layer for CoolingBuffer deferral.
                     layerm->m_fill_surfaces.append(
                         intersection_ex(internal, intersection_with_clearance),
                         stInternalVoid);
+                    layerm->m_infill_moved_to_upper_layer = true;
                 }
             }
         }
