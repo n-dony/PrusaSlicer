@@ -3064,8 +3064,12 @@ std::string GCodeGenerator::extrude_slices(
                 for (const GCode::ExtrusionOrder::Perimeter &perimeter : island_extrusions.perimeters) {
                     if (!perimeter.smooth_path.empty()
                             && perimeter.smooth_path.front().path_attributes.pass_index.has_value()
-                            && *perimeter.smooth_path.front().path_attributes.pass_index == 0)
+                            && *perimeter.smooth_path.front().path_attributes.pass_index == 0) {
                         gcode += this->extrude_smooth_path(perimeter.smooth_path, false, comment_perimeter, -1.0);
+                        this->m_travel_obstacle_tracker.mark_extruded(
+                            perimeter.extrusion_entity, print_instance.object_layer_to_print_id, print_instance.instance_id
+                        );
+                    }
                 }
             }
         }

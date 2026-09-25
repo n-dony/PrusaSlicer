@@ -1601,7 +1601,9 @@ void PerimeterGenerator::process_classic(
             std::vector<ExtrusionPath> pre_pass_paths;
             for (ExtrusionEntity *entity : entities.entities) {
                 if (auto *loop = dynamic_cast<ExtrusionLoop *>(entity)) {
-                    for (ExtrusionPath &path : loop->paths) {
+                    const size_t n = loop->paths.size();
+                    for (size_t i = 0; i < n; ++i) {
+                        ExtrusionPath &path = loop->paths[i];
                         if (path.role().is_bridge()) {
                             // Create pass_index=0 copy before modifying original
                             ExtrusionPath copy(path);
@@ -1617,11 +1619,42 @@ void PerimeterGenerator::process_classic(
                             copy_attrs.mm3_per_mm  = attrs.mm3_per_mm;
                             copy_attrs.height      = attrs.height;
                             copy.set_attributes(copy_attrs);
-                            // Anchor extension on both endpoints into adjacent solid material
-                            if (anchor_len > 0 && copy.polyline.size() >= 2) {
-                                copy.polyline.extend_start(double(anchor_len));
-                                copy.polyline.extend_end(double(anchor_len));
+                            // Build anchor from actual neighbouring non-bridge loop paths
+                            // rather than extrapolating into air.
+                            if (anchor_len > 0) {
+                                // Prefix anchor: tail of the preceding non-bridge path
+                                std::vector<Point> anchor_prefix;
+                                const size_t prev_i = (i == 0) ? n - 1 : i - 1;
+                                const ExtrusionPath &prev_path = loop->paths[prev_i];
+                                if (!prev_path.role().is_bridge() && !prev_path.polyline.points.empty()) {
+                                    Polyline prev_poly = prev_path.polyline;
+                                    double prev_len = prev_poly.length();
+                                    if (prev_len > double(anchor_len))
+                                        prev_poly.clip_start(prev_len - double(anchor_len));
+                                    anchor_prefix = std::move(prev_poly.points);
+                                }
+                                // Suffix anchor: head of the following non-bridge path
+                                std::vector<Point> anchor_suffix;
+                                const size_t next_i = (i + 1) % n;
+                                const ExtrusionPath &next_path = loop->paths[next_i];
+                                if (!next_path.role().is_bridge() && !next_path.polyline.points.empty()) {
+                                    Polyline next_poly = next_path.polyline;
+                                    double next_len = next_poly.length();
+                                    if (next_len > double(anchor_len))
+                                        next_poly.clip_end(next_len - double(anchor_len));
+                                    anchor_suffix = std::move(next_poly.points);
+                                }
+                                // Assemble: prefix + bridge copy + suffix
+                                std::vector<Point> assembled;
+                                assembled.reserve(anchor_prefix.size() + copy.polyline.points.size() + anchor_suffix.size());
+                                assembled.insert(assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
+                                assembled.insert(assembled.end(), copy.polyline.points.begin(), copy.polyline.points.end());
+                                assembled.insert(assembled.end(), anchor_suffix.begin(), anchor_suffix.end());
+                                copy.polyline.points = std::move(assembled);
                             }
+                            // Zero-length guard: skip degenerate copies
+                            if (copy.polyline.size() < 2)
+                                continue;
                             pre_pass_paths.push_back(std::move(copy));
                         }
                     }
