@@ -904,7 +904,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "thick_bridges") {
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
-        } else if (opt_key == "two_pass_bridge" || opt_key == "bridge_anchor_length") {
+        } else if (opt_key == "two_pass_bridge_scope" || opt_key == "bridge_anchor_length") {
+            steps.emplace_back(posPerimeters);
             steps.emplace_back(posInfill);
         } else if (opt_key == "bridge_flow_ratio") {
             if (m_config.support_material_contact_distance > 0.) {

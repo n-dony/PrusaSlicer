@@ -3044,7 +3044,8 @@ std::string GCodeGenerator::extrude_slices(
         print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
 
     std::string gcode;
-    // Bridge foundation pre-pass: print all pass_index==0 fill paths before any perimeters.
+    // Bridge foundation pre-pass: print all pass_index==0 paths (infill and perimeters) before
+    // normal perimeter/infill order so the foundation layer is complete before anything builds on it.
     for (const SliceExtrusions &slice_extrusions : slices_extrusions) {
         for (const IslandExtrusions &island_extrusions : slice_extrusions.common_extrusions) {
             for (const InfillRange &infill_range : island_extrusions.infill_ranges) {
@@ -3055,6 +3056,16 @@ std::string GCodeGenerator::extrude_slices(
                     if (!path.empty() && path.front().path_attributes.pass_index.has_value()
                             && *path.front().path_attributes.pass_index == 0)
                         gcode += this->extrude_smooth_path(path, false, "infill", -1.0);
+                }
+            }
+            // Perimeter pre-pass: bridge perimeter pass_index==0 (two_pass_bridge_scope=BridgeInfillAndPerims)
+            if (!island_extrusions.perimeters.empty()) {
+                this->m_config.apply(island_extrusions.region->config());
+                for (const GCode::ExtrusionOrder::Perimeter &perimeter : island_extrusions.perimeters) {
+                    if (!perimeter.smooth_path.empty()
+                            && perimeter.smooth_path.front().path_attributes.pass_index.has_value()
+                            && *perimeter.smooth_path.front().path_attributes.pass_index == 0)
+                        gcode += this->extrude_smooth_path(perimeter.smooth_path, false, comment_perimeter, -1.0);
                 }
             }
         }
@@ -3314,6 +3325,11 @@ std::string GCodeGenerator::extrude_perimeters(
     std::string gcode{};
 
     for (const GCode::ExtrusionOrder::Perimeter &perimeter : perimeters) {
+        // Skip pass_index==0 perimeters — already printed in the bridge foundation pre-pass.
+        if (!perimeter.smooth_path.empty()
+                && perimeter.smooth_path.front().path_attributes.pass_index.has_value()
+                && *perimeter.smooth_path.front().path_attributes.pass_index == 0)
+            continue;
         double speed{-1};
         // Apply the small perimeter speed.
         if (perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH)

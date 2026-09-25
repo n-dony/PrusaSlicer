@@ -1593,6 +1593,42 @@ void PerimeterGenerator::process_classic(
                                              params.config.swap_first_int_w_ext_perimeter,
                                              params.config.reverse_internal_perimeters,
                                              params.config.reverse_internal_perimeters_at);
+        // Two-pass bridge: duplicate bridge perimeter paths as standalone pass_index=0 pre-pass.
+        // The pass_index=0 copies are added as separate ExtrusionPath entities so the GCode
+        // pre-pass loop can print them before the main perimeter order. Only for classic mode.
+        if (params.object_config.two_pass_bridge_scope.value == TwoPassBridgeScope::BridgeInfillAndPerims) {
+            const coord_t anchor_len = scale_(params.config.bridge_anchor_length.value);
+            std::vector<ExtrusionPath> pre_pass_paths;
+            for (ExtrusionEntity *entity : entities.entities) {
+                if (auto *loop = dynamic_cast<ExtrusionLoop *>(entity)) {
+                    for (ExtrusionPath &path : loop->paths) {
+                        if (path.role().is_bridge()) {
+                            // Create pass_index=0 copy before modifying original
+                            ExtrusionPath copy(path);
+                            // Modify original path to final pass: half flow, half height
+                            ExtrusionAttributes attrs = path.attributes();
+                            attrs.pass_index = uint16_t(1);
+                            attrs.mm3_per_mm *= 0.5;
+                            attrs.height     = float(params.layer_height) * 0.5f;
+                            path.set_attributes(attrs);
+                            // Copy gets same halved flow + pass_index=0 for pre-pass
+                            ExtrusionAttributes copy_attrs = copy.attributes();
+                            copy_attrs.pass_index  = uint16_t(0);
+                            copy_attrs.mm3_per_mm  = attrs.mm3_per_mm;
+                            copy_attrs.height      = attrs.height;
+                            copy.set_attributes(copy_attrs);
+                            // Anchor extension on both endpoints into adjacent solid material
+                            if (anchor_len > 0 && copy.polyline.size() >= 2) {
+                                copy.polyline.extend_start(double(anchor_len));
+                                copy.polyline.extend_end(double(anchor_len));
+                            }
+                            pre_pass_paths.push_back(std::move(copy));
+                        }
+                    }
+                }
+            }
+            entities.append(std::move(pre_pass_paths));
+        }
         // append perimeters for this slice as a collection
         if (! entities.empty())
             out_loops.append(entities);

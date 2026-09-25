@@ -1472,7 +1472,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("avoid_crossing_perimeters_max_detour", category_path + "avoid_crossing_perimeters_max_detour");
         optgroup->append_single_option_line("thin_walls", category_path + "detect-thin-walls");
         optgroup->append_single_option_line("thick_bridges", category_path + "thick_bridges");
-        optgroup->append_single_option_line("two_pass_bridge");
+        optgroup->append_single_option_line("two_pass_bridge_scope");
         optgroup->append_single_option_line("external_perimeter_every_layers");
         optgroup->append_single_option_line("first_internal_perimeter_every_layers");
         optgroup->append_single_option_line("second_internal_perimeter_every_layers");

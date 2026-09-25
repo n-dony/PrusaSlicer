@@ -378,6 +378,13 @@ static t_config_enum_values s_keys_map_ToolChangeOrderingType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ToolChangeOrderingType)
 
+static const t_config_enum_values s_keys_map_TwoPassBridgeScope {
+    { "disabled",                 int(TwoPassBridgeScope::Disabled)           },
+    { "bridge_infill_only",       int(TwoPassBridgeScope::BridgeInfillOnly)   },
+    { "bridge_infill_and_perims", int(TwoPassBridgeScope::BridgeInfillAndPerims) },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TwoPassBridgeScope)
+
 static void assign_printer_technology_to_unknown(t_optiondef_map &options, PrinterTechnology printer_technology)
 {
     for (std::pair<const t_config_option_key, ConfigOptionDef> &kvp : options)
@@ -4020,14 +4027,20 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
-    def = this->add("two_pass_bridge", coBool);
-    def->label = L("Two-pass bridge");
+    def = this->add("two_pass_bridge_scope", coEnum);
+    def->label = L("Two-pass bridge scope");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("[Experimental] Re-extrude bridge infill in multiple passes (see Bridge pass count) "
-                      "to improve bridge quality by layering extrusions. "
+    def->tooltip = L("[Experimental] Re-extrude bridge features in two passes to improve quality. "
+                      "BridgeInfillOnly applies two-pass to bridge infill only (legacy behavior). "
+                      "BridgeInfillAndPerims also applies two-pass to overhang perimeters (classic perimeter mode only). "
                       "Note: no dwell time between passes — each pass immediately follows the previous.");
+    def->set_enum<TwoPassBridgeScope>({
+        { "disabled",                 L("Disabled")                  },
+        { "bridge_infill_only",       L("Bridge infill only")        },
+        { "bridge_infill_and_perims", L("Bridge infill + perimeters") },
+    });
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(false));
+    def->set_default_value(new ConfigOptionEnum<TwoPassBridgeScope>(TwoPassBridgeScope::Disabled));
 
     def = this->add("thin_walls", coBool);
     def->label = L("Detect thin walls");
