@@ -535,6 +535,11 @@ int get_perimeter_count(const Layer *layer){
                 count += static_cast<const ExtrusionEntityCollection*>(ex_entity)->entities.size();
             }
             else {
+                // Skip two-pass bridge foundation copies — they are not real perimeter contours.
+                if (const auto *path = dynamic_cast<const ExtrusionPath *>(ex_entity);
+                        path && path->attributes().pass_index.has_value()
+                        && *path->attributes().pass_index == 0)
+                    continue;
                 count += 1;
             }
         }
