@@ -1651,6 +1651,15 @@ void PerimeterGenerator::process_classic(
                                 assembled.insert(assembled.end(), copy.polyline.points.begin(), copy.polyline.points.end());
                                 assembled.insert(assembled.end(), anchor_suffix.begin(), anchor_suffix.end());
                                 copy.polyline.points = std::move(assembled);
+                                // Apply same anchor to the final pass so both passes deposit into the anchor zone.
+                                if (!anchor_prefix.empty() || !anchor_suffix.empty()) {
+                                    std::vector<Point> path_assembled;
+                                    path_assembled.reserve(anchor_prefix.size() + path.polyline.points.size() + anchor_suffix.size());
+                                    path_assembled.insert(path_assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
+                                    path_assembled.insert(path_assembled.end(), path.polyline.points.begin(), path.polyline.points.end());
+                                    path_assembled.insert(path_assembled.end(), anchor_suffix.begin(), anchor_suffix.end());
+                                    path.polyline.points = std::move(path_assembled);
+                                }
                             }
                             // Zero-length guard: skip degenerate copies
                             if (copy.polyline.size() < 2)
