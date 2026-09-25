@@ -225,6 +225,10 @@ Geometry::Extrusions get_external_perimeters(const Slic3r::Layer &layer, const L
             )};
             for (const ExtrusionEntity *entity : *collection) {
                 if (entity->role().is_external_perimeter()) {
+                    // Skip pass_index==0 two-pass bridge pre-pass copies (open polylines, not loops).
+                    if (const auto *ep = dynamic_cast<const ExtrusionPath *>(entity);
+                            ep && ep->attributes().pass_index.has_value() && *ep->attributes().pass_index == 0)
+                        continue;
                     Overhangs overhangs{get_overhangs(entity)};
                     Polygon polygon{entity->as_polyline().points};
                     const BoundingBox bounding_box{polygon.bounding_box()};

@@ -610,7 +610,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     // get_normal_extrusions() (ExtrusionOrder.cpp) before path smoothing —
                     // deferred to a follow-on commit.
                     const bool do_two_pass = surface_fill.surface.is_bridge()
-                        && obj_cfg.two_pass_bridge.value;
+                        && obj_cfg.two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled;
 
                     // Extend bridge endpoints into the adjacent perimeter for better anchoring.
                     if (surface_fill.surface.is_bridge()) {
