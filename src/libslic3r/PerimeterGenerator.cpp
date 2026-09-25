@@ -1623,7 +1623,7 @@ void PerimeterGenerator::process_classic(
                             // rather than extrapolating into air.
                             if (anchor_len > 0) {
                                 // Prefix anchor: tail of the preceding non-bridge path
-                                std::vector<Point> anchor_prefix;
+                                Points anchor_prefix;
                                 const size_t prev_i = (i == 0) ? n - 1 : i - 1;
                                 const ExtrusionPath &prev_path = loop->paths[prev_i];
                                 if (!prev_path.role().is_bridge() && !prev_path.polyline.points.empty()) {
@@ -1634,7 +1634,7 @@ void PerimeterGenerator::process_classic(
                                     anchor_prefix = std::move(prev_poly.points);
                                 }
                                 // Suffix anchor: head of the following non-bridge path
-                                std::vector<Point> anchor_suffix;
+                                Points anchor_suffix;
                                 const size_t next_i = (i + 1) % n;
                                 const ExtrusionPath &next_path = loop->paths[next_i];
                                 if (!next_path.role().is_bridge() && !next_path.polyline.points.empty()) {
@@ -1645,7 +1645,7 @@ void PerimeterGenerator::process_classic(
                                     anchor_suffix = std::move(next_poly.points);
                                 }
                                 // Assemble: prefix + bridge copy + suffix
-                                std::vector<Point> assembled;
+                                Points assembled;
                                 assembled.reserve(anchor_prefix.size() + copy.polyline.points.size() + anchor_suffix.size());
                                 assembled.insert(assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
                                 assembled.insert(assembled.end(), copy.polyline.points.begin(), copy.polyline.points.end());
@@ -1653,7 +1653,7 @@ void PerimeterGenerator::process_classic(
                                 copy.polyline.points = std::move(assembled);
                                 // Apply same anchor to the final pass so both passes deposit into the anchor zone.
                                 if (!anchor_prefix.empty() || !anchor_suffix.empty()) {
-                                    std::vector<Point> path_assembled;
+                                    Points path_assembled;
                                     path_assembled.reserve(anchor_prefix.size() + path.polyline.points.size() + anchor_suffix.size());
                                     path_assembled.insert(path_assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
                                     path_assembled.insert(path_assembled.end(), path.polyline.points.begin(), path.polyline.points.end());
