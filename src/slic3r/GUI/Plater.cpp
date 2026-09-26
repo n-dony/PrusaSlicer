@@ -2332,6 +2332,10 @@ void Plater::priv::process_validation_warning(const std::vector<std::string>& wa
             text              = _u8L("Using the wipe tower for extruders with different nozzle diameters "
                                      "is experimental, so proceed with caution.");
             notification_type = NotificationType::WipeTowerNozzleDiameterDiffer;
+        } else if (text == "_SCARF_EXTERNAL_EVERY_LAYERS") {
+            text              = _u8L("Scarf seams are disabled because the external perimeter is set to "
+                                     "print every N layers. Scarf joints need the external wall printed "
+                                     "on every layer.");
         } else if (text == "_SUPPORT_NOZZLE_DIAMETER_DIFFER") {
             // TRN: This is a first part of the notification text:
             // "Printing supports with different nozzle diameters is experimental. For best results, switch to Organic supports and assign a specific extruder for supports."

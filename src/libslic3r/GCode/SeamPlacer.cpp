@@ -275,6 +275,31 @@ static bool is_inner_perimeter_role(const ExtrusionRole role)
         || role == ExtrusionRole::SecondInternalPerimeter;
 }
 
+// Wall identity of a loop, decided from its paths collectively. Overhang/bridge role
+// splitting stamps segment roles that carry no wall identity, so classification must use
+// the base roles found anywhere in the loop — never ExtrusionLoop::role(), which is just
+// paths.front().role() and reports OverhangPerimeter whenever the first path happens to
+// cross an overhang, misclassifying inner walls as outer ones.
+enum class LoopWallRole { Outer, Inner, Unknown };
+
+static LoopWallRole loop_wall_role(const ExtrusionLoop &loop)
+{
+    bool has_inner{false};
+    bool has_outer{false};
+    for (const ExtrusionPath &path : loop.paths) {
+        if (path.role() == ExtrusionRole::ExternalPerimeter)
+            has_outer = true;
+        else if (is_inner_perimeter_role(path.role()))
+            has_inner = true;
+    }
+    if (has_inner)
+        return LoopWallRole::Inner;
+    if (has_outer)
+        return LoopWallRole::Outer;
+    // No base wall role left (fully overhang-split loop).
+    return LoopWallRole::Unknown;
+}
+
 boost::variant<Point, Scarf::Scarf> finalize_seam_position(
     const ExtrusionLoop &loop,
     const PrintRegion *region,
@@ -288,7 +313,8 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
     using Perimeters::PointOnPerimeter;
 
     const Polygon loop_polygon{Geometry::to_polygon(loop)};
-    const bool do_staggering{staggered_inner_seams && is_inner_perimeter_role(loop.role())};
+    const LoopWallRole wall_role{loop_wall_role(loop)};
+    const bool do_staggering{staggered_inner_seams && wall_role == LoopWallRole::Inner};
     const double loop_width{loop.paths.empty() ? 0.0 : loop.paths.front().width()};
 
     const ExPolygon perimeter_polygon{Geometry::scaled(perimeter.positions)};
@@ -341,10 +367,24 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
         }
     }
 
-    bool place_scarf_seam {
-        region->config().scarf_seam_placement == ScarfSeamPlacement::everywhere
-        || (region->config().scarf_seam_placement == ScarfSeamPlacement::countours && !perimeter.is_hole)
-    };
+    // Scarf eligibility is decided from the loop itself, never from the matched seam-data
+    // entry (which is always an external perimeter — the entry locates the seam, it does
+    // not identify the loop). "contours" means the non-hole external wall only; inner walls
+    // answer to scarf_seam_on_inner_perimeters in the inner branch below; loops with no
+    // base wall role left (fully overhang-split) get a plain seam.
+    bool place_scarf_seam {false};
+    if (region->config().scarf_seam_placement == ScarfSeamPlacement::everywhere)
+        place_scarf_seam = wall_role != LoopWallRole::Unknown;
+    else if (region->config().scarf_seam_placement == ScarfSeamPlacement::countours)
+        // "Contours" means the non-hole external wall. Hole-ness comes from the loop's own
+        // polygon orientation (holes are clockwise), not from the matched seam-data entry —
+        // bounding-box matching degenerates on rings, where the outer and hole bboxes nest.
+        place_scarf_seam = wall_role == LoopWallRole::Outer && loop_polygon.is_counter_clockwise();
+    // The scarf joint assumes the external wall is printed every layer. With
+    // external_perimeter_every_layers > 1 the external wall itself is printed sparsely
+    // and the joint has no sound per-layer geometry (Print::validate warns about it).
+    if (region->config().external_perimeter_every_layers.value > 1)
+        place_scarf_seam = false;
     const bool is_smooth{
         seam_choice.previous_index != seam_choice.next_index ||
         perimeter.angle_types[seam_choice.previous_index] == Perimeters::AngleType::smooth
@@ -389,7 +429,7 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
             return scaled(loop_point);
         }
 
-        if (!is_inner_perimeter_role(loop.role())) { // Outter perimeter
+        if (wall_role == LoopWallRole::Outer) { // Outer perimeter
             const Vec2d start_point_candidate{project_to_extrusion_loop(
                 *outter_scarf_start_point,
                 perimeter,
@@ -402,7 +442,7 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
             scarf.end_point = scaled(loop_point);
             scarf.end_point_previous_index = loop_line_index;
             return scarf;
-        } else {
+        } else if (wall_role == LoopWallRole::Inner) {
             PointOnPerimeter inner_scarf_end_point{
                 *outter_scarf_start_point
             };
@@ -583,26 +623,33 @@ boost::variant<Point, Scarf::Scarf> Placer::place_seam(
 
         // Special case.
         // If there are only two perimeters and the current perimeter is hole (clockwise).
+        const Polygon loop_polygon{Geometry::to_polygon(loop)};
+        const LoopWallRole wall_role{loop_wall_role(loop)};
+        const SeamPerimeterChoice &closest_seam{choose_closest_seam(seams_on_perimeters, loop_polygon)};
+
         const int perimeter_count{get_perimeter_count(layer)};
         const bool has_2_or_3_perimeters{perimeter_count == 2 || perimeter_count == 3};
-        if (has_2_or_3_perimeters) {
-            if (seams_on_perimeters.size() == 2 &&
-                seams_on_perimeters[0].perimeter.is_hole !=
-                    seams_on_perimeters[1].perimeter.is_hole) {
-                const SeamPerimeterChoice &seam_perimeter_choice{
-                    seams_on_perimeters[0].perimeter.is_hole ? seams_on_perimeters[1] :
-                                                               seams_on_perimeters[0]};
-                return finalize_seam_position(
-                    loop, region, seam_perimeter_choice.choice, seam_perimeter_choice.perimeter,
-                    this->params.staggered_inner_seams, flipped, thick_bridges
-                );
-            }
+        // The 2-or-3 special case exists for the degenerate ring case, where the outer and
+        // hole bounding boxes nest and bbox matching is unreliable. It may only override the
+        // matching for the loop that IS the non-hole external wall — decided from the loop
+        // itself (base wall role + polygon orientation), never from the matching. Feeding
+        // that entry to any other loop (holes, internal walls) locates the seam on foreign
+        // geometry and targets the scarf joint at the wrong loop.
+        if (has_2_or_3_perimeters &&
+            seams_on_perimeters.size() == 2 &&
+            seams_on_perimeters[0].perimeter.is_hole != seams_on_perimeters[1].perimeter.is_hole &&
+            wall_role == LoopWallRole::Outer && loop_polygon.is_counter_clockwise()) {
+            const SeamPerimeterChoice &non_hole_seam{
+                seams_on_perimeters[0].perimeter.is_hole ? seams_on_perimeters[1] :
+                                                           seams_on_perimeters[0]};
+            return finalize_seam_position(
+                loop, region, non_hole_seam.choice, non_hole_seam.perimeter,
+                this->params.staggered_inner_seams, flipped, thick_bridges
+            );
         }
 
-        const SeamPerimeterChoice &seam_perimeter_choice{
-            choose_closest_seam(seams_on_perimeters, Geometry::to_polygon(loop))};
         return finalize_seam_position(
-            loop, region, seam_perimeter_choice.choice, seam_perimeter_choice.perimeter,
+            loop, region, closest_seam.choice, closest_seam.perimeter,
             this->params.staggered_inner_seams, flipped, thick_bridges
         );
     }

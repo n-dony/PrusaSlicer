@@ -517,6 +517,19 @@ std::string Print::validate(std::vector<std::string>* warnings) const
             return _u8L("The Spiral Vase option can only be used when printing single material objects.");
     }
 
+    if (warnings != nullptr && std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) {
+            // The scarf seam joint assumes the external wall is printed every layer. With
+            // external_perimeter_every_layers > 1 the external wall is printed sparsely,
+            // leaving the joint no sound per-layer geometry; seam placement suppresses
+            // the joint, so the ignored setting must be reported.
+            for (const PrintRegion &region : object->all_regions())
+                if (region.config().scarf_seam_placement != ScarfSeamPlacement::nowhere &&
+                    region.config().external_perimeter_every_layers.value > 1)
+                    return true;
+            return false;
+        }))
+        warnings->emplace_back("_SCARF_EXTERNAL_EVERY_LAYERS");
+
     if (m_config.machine_limits_usage == MachineLimitsUsage::EmitToGCode && m_config.gcode_flavor == gcfKlipper)
         return L("Machine limits cannot be emitted to G-Code when Klipper firmware flavor is used. "
                  "Change the value of machine_limits_usage.");
