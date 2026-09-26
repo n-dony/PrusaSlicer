@@ -611,8 +611,10 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     // deferred to a follow-on commit.
                     const bool do_two_pass = surface_fill.surface.is_bridge()
                         && obj_cfg.two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled;
+                    const bool do_crosshatch = do_two_pass
+                        && two_pass_is_crosshatch(obj_cfg.two_pass_bridge_scope.value);
 
-                    if (do_two_pass) {
+                    if (do_two_pass && !do_crosshatch) {
                         // Use actual layer height for the pass height, not the bridge extrusion
                         // height (which is the nozzle diameter for thick bridges).  Half-volume
                         // split keeps the same total material as a single-pass bridge.
@@ -644,6 +646,66 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                             attrs.pass_index = uint16_t(1);
                             extrusion_entities_append_paths(
                                 eec->entities, std::move(polylines),
+                                attrs, !params.prefer_clockwise_movements);
+                        }
+                        layerm.m_fills.entities.push_back(eec);
+                    } else if (do_crosshatch) {
+                        // Cross-hatch bridge:
+                        // Pass 0 (foundation) = original polylines at the detected bridge angle.
+                        // Pass 1 (final)      = polylines generated over the footprint of pass 0,
+                        //                       at the perpendicular angle, so every pass-1 line
+                        //                       lands on the pass-0 lattice instead of bare air.
+                        const float  pass_height = float(params.layer_height) * 0.5f;
+                        const double pass_mm3    = flow_mm3_per_mm * 0.5;
+
+                        eec->no_sort = true;   // preserve pass 0 before pass 1
+
+                        // --- Pass 0: foundation ---
+                        {
+                            ExtrusionAttributes attrs{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
+                                f->is_self_crossing()
+                            };
+                            attrs.pass_index = uint16_t(0);
+                            extrusion_entities_append_paths(
+                                eec->entities, Polylines{polylines},   // copy; polylines reused below
+                                attrs, !params.prefer_clockwise_movements);
+                        }
+
+                        // --- Pass 1: final (perpendicular) ---
+                        // 1. Footprint polygon from the pass 0 polylines.
+                        //    Offset by spacing/2 + a small epsilon so adjacent lines merge into a solid polygon.
+                        const double offset_dist = scale_(f->spacing) / 2.0 + 5.0; // 5 scaled units overlap
+                        ExPolygons pass0_footprint = union_ex(offset(polylines, offset_dist));
+
+                        // 2. Generate pass 1 over this footprint at 90 degrees.
+                        Polylines perp_polylines;
+                        for (const ExPolygon &ep : pass0_footprint) {
+                            Surface surface_perp(surface_fill.surface, ep);
+                            // Correct angle arithmetic: `_infill_direction` adds M_PI/2 to the surface's bridge_angle.
+                            // To get a raster that is 90° from pass 0, set bridge_angle to (original - M_PI/2).
+                            surface_perp.bridge_angle = surface_fill.surface.bridge_angle - M_PI / 2.0;
+                            if (surface_perp.bridge_angle < 0.0)
+                                surface_perp.bridge_angle += M_PI; // Normalize
+
+                            try {
+                                Polylines local_perp = f->fill_surface(&surface_perp, params);
+                                perp_polylines.insert(perp_polylines.end(), local_perp.begin(), local_perp.end());
+                            } catch (InfillFailedException &) {}
+                        }
+
+                        // Pass-1 lines are generated inside the pass-0 footprint, so they are
+                        // anchored by construction; no extra anchor extension is applied.
+                        {
+                            ExtrusionAttributes attrs{
+                                surface_fill.params.extrusion_role,
+                                ExtrusionFlow{ pass_mm3, float(flow_width), pass_height },
+                                f->is_self_crossing()
+                            };
+                            attrs.pass_index = uint16_t(1);
+                            extrusion_entities_append_paths(
+                                eec->entities, std::move(perp_polylines),
                                 attrs, !params.prefer_clockwise_movements);
                         }
                         layerm.m_fills.entities.push_back(eec);
