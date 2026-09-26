@@ -530,6 +530,16 @@ std::pair<SeamChoice, std::size_t> place_seam_near(
 int get_perimeter_count(const Layer *layer){
     int count{0};
     for (const LayerRegion *layer_region : layer->regions()) {
+        // On the sub-layers of a perimeter combine group the internal-perimeter entities were
+        // moved to the group-top layer, so the live inventory no longer reflects the layer's
+        // real perimeter structure. Use the stashed pre-combine count instead, so seam
+        // placement (e.g. the 2-or-3-perimeter special case) behaves identically on every
+        // layer of a combine group.
+        if (layer_region->perimeters_moved_to_upper_layer() &&
+            layer_region->perimeter_entity_count_pre_combine() >= 0) {
+            count += layer_region->perimeter_entity_count_pre_combine();
+            continue;
+        }
         for (const ExtrusionEntity *ex_entity : layer_region->perimeters()) {
             if (ex_entity->is_collection()) { //collection of inner, outer, and overhang perimeters
                 count += static_cast<const ExtrusionEntityCollection*>(ex_entity)->entities.size();

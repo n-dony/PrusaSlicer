@@ -3280,8 +3280,10 @@ void PrintObject::combine_perimeters()
     // Reset the flag on every LayerRegion before re-running — Layer objects survive
     // posPerimeters invalidation, so a stale flag from the previous run must be cleared.
     for (Layer *layer : m_layers)
-        for (LayerRegion *layerm : layer->m_regions)
+        for (LayerRegion *layerm : layer->m_regions) {
             layerm->m_perimeters_moved_to_upper_layer = false;
+            layerm->m_perimeter_entity_count_pre_combine = -1;
+        }
 
     struct RoleSpec {
         ExtrusionRole role;
@@ -3501,6 +3503,24 @@ void PrintObject::combine_perimeters()
                 // the CoolingBuffer flush and evaluate the group under N×T.
                 for (size_t i = group_start; i < top_idx; ++i) {
                     LayerRegion *sub_rm = m_layers[i]->m_regions[region_id];
+                    // Stash this layer's pre-combine perimeter entity count (counted exactly
+                    // like SeamPlacer::get_perimeter_count) so seam placement keeps seeing
+                    // the layer's real perimeter structure while it belongs to a combine group.
+                    {
+                        int entity_count = 0;
+                        for (const ExtrusionEntity *ee : sub_rm->m_perimeters.entities) {
+                            if (ee->is_collection()) {
+                                entity_count += static_cast<const ExtrusionEntityCollection *>(ee)->entities.size();
+                            } else {
+                                if (const auto *ep = dynamic_cast<const ExtrusionPath *>(ee);
+                                        ep && ep->attributes().pass_index.has_value()
+                                        && *ep->attributes().pass_index == 0)
+                                    continue;
+                                ++ entity_count;
+                            }
+                        }
+                        sub_rm->m_perimeter_entity_count_pre_combine = entity_count;
+                    }
                     walk(sub_rm, [&](ExtrusionPath &path) {
                         if (!role_matches(path.role()))
                             return;

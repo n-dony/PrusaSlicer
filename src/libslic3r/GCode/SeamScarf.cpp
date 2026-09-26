@@ -1,6 +1,8 @@
 #include "libslic3r/GCode/SeamScarf.hpp"
 #include "libslic3r/GCode/SmoothPath.hpp"
 
+#include <boost/log/trivial.hpp>
+
 namespace Slic3r::Seams::Scarf {
 
 namespace Impl {
@@ -346,6 +348,13 @@ std::pair<GCode::SmoothPath, std::size_t> add_scarf_seam(
         start_point = Impl::find_path_point_from_end(paths, scarf.start_point, tolerance);
     }
     if (!start_point) {
+        if (!scarf.entire_loop)
+            // The scarf start was not located on the extruded loop. The front() fallback below
+            // then ramps the scarf over nearly the whole loop, which loses geometry — log it so
+            // the disagreeing placement data (e.g. on combine-group layers) can be traced.
+            BOOST_LOG_TRIVIAL(warning)
+                << "add_scarf_seam: scarf start point not found on the extruded loop, "
+                   "falling back to the path start";
         start_point = Impl::PathPoint{
             paths.front().first_point(),
             0,
