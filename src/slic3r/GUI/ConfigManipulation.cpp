@@ -338,6 +338,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     toggle_field("external_perimeter_every_layers",       have_perimeters);
     toggle_field("first_internal_perimeter_every_layers", have_perimeters);
     toggle_field("second_internal_perimeter_every_layers", have_perimeters);
+    toggle_field("combine_perimeters_overlap_percent",   have_perimeters);
 
     const bool has_ensure_vertical_shell_thickness = config->opt_enum<EnsureVerticalShellThickness>("ensure_vertical_shell_thickness") != EnsureVerticalShellThickness::Disabled;
     toggle_field("top_solid_min_thickness", !has_spiral_vase && has_top_solid_infill && has_ensure_vertical_shell_thickness);

@@ -481,6 +481,7 @@ static std::vector<std::string> s_Preset_print_options {
     "external_perimeter_every_layers",
     "first_internal_perimeter_every_layers",
     "second_internal_perimeter_every_layers",
+    "combine_perimeters_overlap_percent",
     "solid_infill_below_area", "only_retract_when_crossing_perimeters", "infill_first",
     "ironing", "ironing_type", "ironing_flowrate", "ironing_speed", "ironing_spacing",
     "max_print_speed", "max_volumetric_speed", "avoid_crossing_perimeters_max_detour",
