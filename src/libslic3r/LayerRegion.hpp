@@ -151,6 +151,7 @@ public:
     // True when combine_perimeters() voided internal perimeter paths of this region because they
     // will be printed merged at combined height on the group-top layer above this one.
     bool    perimeters_moved_to_upper_layer() const { return m_perimeters_moved_to_upper_layer; }
+    int     perimeter_entity_count_pre_combine() const { return m_perimeter_entity_count_pre_combine; }
 
     // True when combine_infill() voided internal infill of this region because it will be
     // printed merged at combined height on the group-top layer above this one.
@@ -218,6 +219,14 @@ private:
     // Set by PrintObject::combine_perimeters() on the lower (thin) layers of each combine group.
     // Reset to false at the top of combine_perimeters() before each run.
     bool    m_perimeters_moved_to_upper_layer { false };
+
+    // Perimeter entity count of this LayerRegion as it was before
+    // PrintObject::combine_perimeters() voided the group's internal-perimeter paths
+    // (moved to the group-top layer). Stashed so that seam-placement consumers
+    // (SeamPlacer::get_perimeter_count) see the layer's real perimeter structure on
+    // every layer of a combine group, not the hollowed post-combine inventory.
+    // -1 = this region is not part of a perimeter combine group.
+    int     m_perimeter_entity_count_pre_combine { -1 };
 
     // Set by PrintObject::combine_infill() on the lower (thin) layers of each infill combine group.
     // Reset to false at the top of combine_infill() before each run.
