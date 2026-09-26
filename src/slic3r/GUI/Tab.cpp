@@ -1476,6 +1476,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("external_perimeter_every_layers");
         optgroup->append_single_option_line("first_internal_perimeter_every_layers");
         optgroup->append_single_option_line("second_internal_perimeter_every_layers");
+        optgroup->append_single_option_line("combine_perimeters_overlap_percent");
         optgroup->append_single_option_line("overhangs", category_path + "detect-bridging-perimeters");
 
         optgroup = page->new_optgroup(L("Advanced"));

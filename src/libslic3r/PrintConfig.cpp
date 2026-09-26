@@ -2263,6 +2263,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
+    def = this->add("combine_perimeters_overlap_percent", coPercent);
+    def->label = L("Combine perimeters overlap");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Allowed horizontal overlap percentage when combining perimeters across layers. A larger value (e.g. 100%) allows combining on sloped walls, while a smaller value (e.g. 50%) restricts combining to near-vertical walls.");
+    def->sidetext = L("%");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(50));
+
     auto def_infill_anchor_min = def = this->add("infill_anchor", coFloatOrPercent);
     def->label = L("Length of the infill anchor");
     def->category = L("Advanced");

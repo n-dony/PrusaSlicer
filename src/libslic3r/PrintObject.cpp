@@ -3422,23 +3422,29 @@ void PrintObject::combine_perimeters()
                 };
 
                 // Build a Polygons coverage mask from role-matching paths.
-                // polygons_covered_by_width() offsets by width/2 — the correct radius.
-                auto build_mask = [&](LayerRegion *rm) -> Polygons {
+                // polygons_covered_by_width() offsets by width/2 — the correct radius —
+                // plus extra_offset, which inflates the mask by a configurable tolerance
+                // so that perimeters shifted horizontally by sloped walls still combine.
+                auto build_mask = [&](LayerRegion *rm, float extra_offset) -> Polygons {
                     Polygons mask;
                     walk(rm, [&](ExtrusionPath &path) {
                         if (role_matches(path.role()) && !path.polyline.empty())
-                            path.polygons_covered_by_width(mask, 0.f);
+                            path.polygons_covered_by_width(mask, extra_offset);
                     });
                     return union_(mask);
                 };
 
-                Polylines top_polylines = collect_polylines(top_rm);
-                if (top_polylines.empty()) continue;
-                Polygons  top_mask      = build_mask(top_rm);
-
-                // Tolerance: longest diff fragment ≤ 0.5 × width, total ≤ 1.0 × width.
-                const float tol_half = 0.5f * m_layers[top_idx]->m_regions[region_id]
+                // Tolerance: horizontal shift accepted between sub-layer and top-layer
+                // perimeters, as a percentage of the extrusion width. The coverage
+                // masks are inflated by this amount before the diff, so walls sloped by
+                // up to (percent/100) × width per combine group still pass. Residual
+                // diff fragments (numeric noise) must stay within a small fraction
+                // of the width: longest ≤ 0.25 × width, total ≤ 0.5 × width.
+                const float width_scaled = m_layers[top_idx]->m_regions[region_id]
                     ->flow(flow_role).scaled_width();
+                const float tol_scaled = float(cfg.combine_perimeters_overlap_percent.value)
+                    / 100.f * width_scaled;
+                const float tol_half = 0.25f * width_scaled;
                 auto passes_tolerance = [&](Polylines &&diff) -> bool {
                     double total = 0., longest = 0.;
                     for (const Polyline &pl : diff) {
@@ -3449,12 +3455,16 @@ void PrintObject::combine_perimeters()
                     return longest <= tol_half && total <= 2. * tol_half;
                 };
 
+                Polylines top_polylines = collect_polylines(top_rm);
+                if (top_polylines.empty()) continue;
+                Polygons  top_mask      = build_mask(top_rm, tol_scaled);
+
                 bool window_ok = true;
                 for (size_t i = group_start; i < top_idx && window_ok; ++i) {
                     LayerRegion *sub_rm       = m_layers[i]->m_regions[region_id];
                     Polylines    sub_polylines = collect_polylines(sub_rm);
                     if (sub_polylines.empty()) { window_ok = false; break; }
-                    Polygons sub_mask = build_mask(sub_rm);
+                    Polygons sub_mask = build_mask(sub_rm, tol_scaled);
                     // Sub→top: every sub-layer path must lie under a top-layer replacement.
                     if (!passes_tolerance(diff_pl(sub_polylines, top_mask))) { window_ok = false; break; }
                     // Top→sub: top-layer paths must not overhang sub-layer geometry.
