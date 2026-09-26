@@ -1249,7 +1249,96 @@ void PerimeterGenerator::process_arachne(
         perimeters, params.config.external_perimeters_first, params.config.swap_first_int_w_ext_perimeter,
         params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at);
 
-    if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
+    ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions);
+    // Two-pass bridge: duplicate bridge perimeter paths for Arachne mode.
+    // Same logic as classic mode (lines 1596-1672), extended to handle ExtrusionMultiPath (open extrusions).
+    if (params.object_config.two_pass_bridge_scope.value == TwoPassBridgeScope::BridgeInfillAndPerims) {
+        const coord_t anchor_len = scale_(params.config.bridge_anchor_length.value);
+        std::vector<ExtrusionPath> pre_pass_paths;
+        for (ExtrusionEntity *entity : extrusion_coll.entities) {
+            ExtrusionPaths *paths_ptr = nullptr;
+            bool is_open = false;
+            if (auto *lp = dynamic_cast<ExtrusionLoop *>(entity)) {
+                paths_ptr = &lp->paths;
+                is_open = false;
+            } else if (auto *mp = dynamic_cast<ExtrusionMultiPath *>(entity)) {
+                paths_ptr = &mp->paths;
+                is_open = true;
+            }
+            if (!paths_ptr)
+                continue;
+            ExtrusionPaths &lpaths = *paths_ptr;
+            const size_t n = lpaths.size();
+            for (size_t i = 0; i < n; ++i) {
+                ExtrusionPath &path = lpaths[i];
+                if (!path.role().is_bridge())
+                    continue;
+                ExtrusionPath copy(path);
+                ExtrusionAttributes attrs = path.attributes();
+                attrs.pass_index = uint16_t(1);
+                attrs.mm3_per_mm *= 0.5;
+                attrs.height     = float(params.layer_height) * 0.5f;
+                path.set_attributes(attrs);
+                ExtrusionAttributes copy_attrs = copy.attributes();
+                copy_attrs.pass_index  = uint16_t(0);
+                copy_attrs.mm3_per_mm  = attrs.mm3_per_mm;
+                copy_attrs.height      = attrs.height;
+                copy.set_attributes(copy_attrs);
+                if (anchor_len > 0) {
+                    // Prefix anchor: tail of the preceding non-bridge path.
+                    // For open paths (ExtrusionMultiPath), clamp at boundary instead of wrapping.
+                    Points anchor_prefix;
+                    const bool has_prev = !is_open || i > 0;
+                    if (has_prev) {
+                        const size_t prev_i = (i == 0) ? n - 1 : i - 1;
+                        const ExtrusionPath &prev_path = lpaths[prev_i];
+                        if (!prev_path.role().is_bridge() && !prev_path.polyline.points.empty()) {
+                            Polyline prev_poly = prev_path.polyline;
+                            double prev_len = prev_poly.length();
+                            if (prev_len > double(anchor_len))
+                                prev_poly.clip_start(prev_len - double(anchor_len));
+                            anchor_prefix = std::move(prev_poly.points);
+                        }
+                    }
+                    // Suffix anchor: head of the following non-bridge path.
+                    Points anchor_suffix;
+                    const bool has_next = !is_open || i + 1 < n;
+                    if (has_next) {
+                        const size_t next_i = is_open ? i + 1 : (i + 1) % n;
+                        const ExtrusionPath &next_path = lpaths[next_i];
+                        if (!next_path.role().is_bridge() && !next_path.polyline.points.empty()) {
+                            Polyline next_poly = next_path.polyline;
+                            double next_len = next_poly.length();
+                            if (next_len > double(anchor_len))
+                                next_poly.clip_end(next_len - double(anchor_len));
+                            anchor_suffix = std::move(next_poly.points);
+                        }
+                    }
+                    // Assemble: prefix + bridge copy + suffix
+                    Points assembled;
+                    assembled.reserve(anchor_prefix.size() + copy.polyline.points.size() + anchor_suffix.size());
+                    assembled.insert(assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
+                    assembled.insert(assembled.end(), copy.polyline.points.begin(), copy.polyline.points.end());
+                    assembled.insert(assembled.end(), anchor_suffix.begin(), anchor_suffix.end());
+                    copy.polyline.points = std::move(assembled);
+                    // Apply same anchor to the final pass.
+                    if (!anchor_prefix.empty() || !anchor_suffix.empty()) {
+                        Points path_assembled;
+                        path_assembled.reserve(anchor_prefix.size() + path.polyline.points.size() + anchor_suffix.size());
+                        path_assembled.insert(path_assembled.end(), anchor_prefix.begin(), anchor_prefix.end());
+                        path_assembled.insert(path_assembled.end(), path.polyline.points.begin(), path.polyline.points.end());
+                        path_assembled.insert(path_assembled.end(), anchor_suffix.begin(), anchor_suffix.end());
+                        path.polyline.points = std::move(path_assembled);
+                    }
+                }
+                if (copy.polyline.size() < 2)
+                    continue;
+                pre_pass_paths.push_back(std::move(copy));
+            }
+        }
+        extrusion_coll.append(std::move(pre_pass_paths));
+    }
+    if (!extrusion_coll.empty())
         out_loops.append(extrusion_coll);
 
     const coord_t spacing = (perimeters.size() == 1) ? ext_perimeter_spacing2 : perimeter_spacing;
