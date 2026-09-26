@@ -382,6 +382,8 @@ static const t_config_enum_values s_keys_map_TwoPassBridgeScope {
     { "disabled",                 int(TwoPassBridgeScope::Disabled)           },
     { "bridge_infill_only",       int(TwoPassBridgeScope::BridgeInfillOnly)   },
     { "bridge_infill_and_perims", int(TwoPassBridgeScope::BridgeInfillAndPerims) },
+    { "crosshatch_infill_only",       int(TwoPassBridgeScope::CrosshatchInfillOnly)       },
+    { "crosshatch_infill_and_perims", int(TwoPassBridgeScope::CrosshatchInfillAndPerims) },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TwoPassBridgeScope)
 
@@ -4043,11 +4045,15 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("[Experimental] Re-extrude bridge features in two passes to improve quality. "
                       "BridgeInfillOnly applies two-pass to bridge infill only (legacy behavior). "
                       "BridgeInfillAndPerims also applies two-pass to overhang perimeters (classic perimeter mode only). "
+                      "CrosshatchInfillOnly prints the second bridge infill pass perpendicular to the first, over its footprint. "
+                      "CrosshatchInfillAndPerims combines crosshatch infill with same-angle two-pass perimeters. "
                       "Note: no dwell time between passes — each pass immediately follows the previous.");
     def->set_enum<TwoPassBridgeScope>({
         { "disabled",                 L("Disabled")                  },
         { "bridge_infill_only",       L("Bridge infill only")        },
         { "bridge_infill_and_perims", L("Bridge infill + perimeters") },
+        { "crosshatch_infill_only",       L("Crosshatch infill only")        },
+        { "crosshatch_infill_and_perims", L("Crosshatch infill + perimeters") },
     });
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<TwoPassBridgeScope>(TwoPassBridgeScope::Disabled));

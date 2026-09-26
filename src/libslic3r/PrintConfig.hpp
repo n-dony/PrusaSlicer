@@ -295,7 +295,18 @@ enum class TwoPassBridgeScope : uint8_t {
     Disabled,
     BridgeInfillOnly,
     BridgeInfillAndPerims,
+    CrosshatchInfillOnly,
+    CrosshatchInfillAndPerims,
 };
+
+inline bool two_pass_is_crosshatch(TwoPassBridgeScope s) {
+    return s == TwoPassBridgeScope::CrosshatchInfillOnly
+        || s == TwoPassBridgeScope::CrosshatchInfillAndPerims;
+}
+inline bool two_pass_has_perims(TwoPassBridgeScope s) {
+    return s == TwoPassBridgeScope::BridgeInfillAndPerims
+        || s == TwoPassBridgeScope::CrosshatchInfillAndPerims;
+}
 
 #define CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NAME) \
     template<> const t_config_enum_names& ConfigOptionEnum<NAME>::get_enum_names(); \
