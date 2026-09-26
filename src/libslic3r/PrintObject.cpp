@@ -742,6 +742,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "external_perimeter_every_layers"
             || opt_key == "first_internal_perimeter_every_layers"
             || opt_key == "second_internal_perimeter_every_layers"
+            || opt_key == "combine_perimeters_overlap_percent"
             || opt_key == "high_def_print") {
             steps.emplace_back(posPerimeters);
         } else if (
