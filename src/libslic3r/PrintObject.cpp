@@ -3255,6 +3255,57 @@ void PrintObject::combine_infill()
                     layerm->m_infill_moved_to_upper_layer = true;
                 }
             }
+
+            // Solid infill bands between the innermost perimeter and the sparse infill
+            // (stInternalSolid: solid_infill_below_area narrow regions, vertical-shell
+            // columns) coarsen with their two neighbours instead of on their own grouping:
+            // they combine with this group only when both the internal perimeters
+            // (perimeters_moved_to_upper_layer, set by combine_perimeters in
+            // make_perimeters) and the sparse infill (the intersection above; an empty
+            // sparse intersection already continued past this group) moved to this group
+            // top. This keeps the group interior's column heights consistent — thick
+            // walls, thick solid bands, thick sparse infill — and leaves no thin solid
+            // strips orphaned beside voided walls on the sub-layers. When either
+            // neighbour keeps the fine resolution, the bands keep it too.
+            bool walls_moved_to_group_top = true;
+            for (size_t i = 0; i + 1 < layerms.size(); ++ i)
+                if (! layerms[i]->perimeters_moved_to_upper_layer()) {
+                    walls_moved_to_group_top = false;
+                    break;
+                }
+            if (walls_moved_to_group_top) {
+                ExPolygons solid_intersection = to_expolygons(layerms.front()->fill_surfaces().filter_by_type(stInternalSolid));
+                for (size_t i = 1; i < layerms.size(); ++ i)
+                    solid_intersection = intersection_ex(layerms[i]->fill_surfaces().filter_by_type(stInternalSolid), solid_intersection);
+                if (area_threshold > 0.)
+                    solid_intersection.erase(std::remove_if(solid_intersection.begin(), solid_intersection.end(),
+                        [area_threshold](const ExPolygon &expoly) { return expoly.area() <= area_threshold; }),
+                        solid_intersection.end());
+                if (! solid_intersection.empty()) {
+                    Polygons solid_clearance;
+                    solid_clearance.reserve(solid_intersection.size());
+                    for (ExPolygon &expoly : solid_intersection)
+                        polygons_append(solid_clearance, offset(expoly, clearance_offset));
+                    for (LayerRegion *layerm : layerms) {
+                        Polygons solid = to_polygons(std::move(layerm->fill_surfaces().filter_by_type(stInternalSolid)));
+                        layerm->m_fill_surfaces.remove_type(stInternalSolid);
+                        layerm->m_fill_surfaces.append(diff_ex(solid, solid_clearance), stInternalSolid);
+                        if (layerm == layerms.back()) {
+                            Surface templ(stInternalSolid, ExPolygon());
+                            templ.thickness = 0.;
+                            for (LayerRegion *layerm2 : layerms)
+                                templ.thickness += layerm2->layer()->height;
+                            templ.thickness_layers = (unsigned short)layerms.size();
+                            layerm->m_fill_surfaces.append(solid_intersection, templ);
+                        } else {
+                            layerm->m_fill_surfaces.append(
+                                intersection_ex(solid, solid_clearance),
+                                stInternalVoid);
+                            layerm->m_infill_moved_to_upper_layer = true;
+                        }
+                    }
+                }
+            }
         }
     }
 } // void PrintObject::combine_infill()
