@@ -548,9 +548,23 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         params.layer_height               = layerm.layer()->height;
         params.prefer_clockwise_movements = this->object()->print()->config().prefer_clockwise_movements;
 
+        // Two-pass thick (round) bridges: halving a round strand's material shrinks its
+        // diameter by sqrt(2), so each pass must re-space its lines at spacing/sqrt(2)
+        // to keep the strands tiling; otherwise the passes leave gaps of ~0.29 x spacing.
+        // The round flow model halves the strand mm3 and width automatically via
+        // with_spacing() below, so no further halving is applied for round flows.
+        // Flat flows (thick_bridges off, perimeters) keep the half-flow/half-height
+        // split, which preserves the width there.
+        const bool two_pass_round_bridge =
+            ! params.use_arachne &&
+            surface_fill.surface.is_bridge() && surface_fill.params.flow.bridge() &&
+            layerm.layer()->object()->config().two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled;
+
         for (ExPolygon &expoly : surface_fill.expolygons) {
 			// Spacing is modified by the filler to indicate adjustments. Reset it for each expolygon.
-			f->spacing = surface_fill.params.spacing;
+			f->spacing = two_pass_round_bridge ?
+				surface_fill.params.spacing * float(1. / std::sqrt(2.)) :
+				surface_fill.params.spacing;
 			surface_fill.surface.expolygon = std::move(expoly);
             Polylines      polylines;
             ThickPolylines thick_polylines;
@@ -619,7 +633,9 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                         // height (which is the nozzle diameter for thick bridges).  Half-volume
                         // split keeps the same total material as a single-pass bridge.
                         const float  pass_height = float(params.layer_height) * 0.5f;
-                        const double pass_mm3    = flow_mm3_per_mm * 0.5;
+                        // Round bridge flows already carry the per-pass values: the denser
+                        // spacing halved the strand mm3 via with_spacing(). Flat flows halve here.
+                        const double pass_mm3    = two_pass_round_bridge ? flow_mm3_per_mm : flow_mm3_per_mm * 0.5;
 
                         // no_sort=true preserves pass order so the path chainer cannot interleave passes.
                         eec->no_sort = true;
@@ -656,7 +672,9 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                         //                       at the perpendicular angle, so every pass-1 line
                         //                       lands on the pass-0 lattice instead of bare air.
                         const float  pass_height = float(params.layer_height) * 0.5f;
-                        const double pass_mm3    = flow_mm3_per_mm * 0.5;
+                        // Round bridge flows already carry the per-pass values: the denser
+                        // spacing halved the strand mm3 via with_spacing(). Flat flows halve here.
+                        const double pass_mm3    = two_pass_round_bridge ? flow_mm3_per_mm : flow_mm3_per_mm * 0.5;
 
                         eec->no_sort = true;   // preserve pass 0 before pass 1
 
