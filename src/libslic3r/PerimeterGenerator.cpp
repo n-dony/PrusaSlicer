@@ -1287,17 +1287,25 @@ void PerimeterGenerator::process_arachne(
                 if (anchor_len > 0) {
                     // Prefix anchor: tail of the preceding non-bridge path.
                     // For open paths (ExtrusionMultiPath), clamp at boundary instead of wrapping.
+                    // The borrowed segments are clipped from the source paths: the anchor zone is
+                    // deposited only by the two half-flow passes (0.5x + 0.5x = 1x nominal),
+                    // never again by the owning perimeter path.
                     Points anchor_prefix;
                     const bool has_prev = !is_open || i > 0;
                     if (has_prev) {
                         const size_t prev_i = (i == 0) ? n - 1 : i - 1;
-                        const ExtrusionPath &prev_path = lpaths[prev_i];
-                        if (!prev_path.role().is_bridge() && !prev_path.polyline.points.empty()) {
+                        ExtrusionPath &prev_path = lpaths[prev_i];
+                        if (!prev_path.role().is_bridge() && prev_path.polyline.points.size() >= 2) {
                             Polyline prev_poly = prev_path.polyline;
-                            double prev_len = prev_poly.length();
-                            if (prev_len > double(anchor_len))
-                                prev_poly.clip_start(prev_len - double(anchor_len));
-                            anchor_prefix = std::move(prev_poly.points);
+                            const double prev_len = prev_poly.length();
+                            const double borrowed_prev = std::min(double(anchor_len), prev_len);
+                            if (borrowed_prev > 0.) {
+                                if (prev_len > double(anchor_len))
+                                    prev_poly.clip_start(prev_len - double(anchor_len));
+                                anchor_prefix = std::move(prev_poly.points);
+                                // Remove the borrowed tail from the source path.
+                                prev_path.polyline.clip_end(borrowed_prev);
+                            }
                         }
                     }
                     // Suffix anchor: head of the following non-bridge path.
@@ -1305,13 +1313,18 @@ void PerimeterGenerator::process_arachne(
                     const bool has_next = !is_open || i + 1 < n;
                     if (has_next) {
                         const size_t next_i = is_open ? i + 1 : (i + 1) % n;
-                        const ExtrusionPath &next_path = lpaths[next_i];
-                        if (!next_path.role().is_bridge() && !next_path.polyline.points.empty()) {
+                        ExtrusionPath &next_path = lpaths[next_i];
+                        if (!next_path.role().is_bridge() && next_path.polyline.points.size() >= 2) {
                             Polyline next_poly = next_path.polyline;
-                            double next_len = next_poly.length();
-                            if (next_len > double(anchor_len))
-                                next_poly.clip_end(next_len - double(anchor_len));
-                            anchor_suffix = std::move(next_poly.points);
+                            const double next_len = next_poly.length();
+                            const double borrowed_next = std::min(double(anchor_len), next_len);
+                            if (borrowed_next > 0.) {
+                                if (next_len > double(anchor_len))
+                                    next_poly.clip_end(next_len - double(anchor_len));
+                                anchor_suffix = std::move(next_poly.points);
+                                // Remove the borrowed head from the source path.
+                                next_path.polyline.clip_start(borrowed_next);
+                            }
                         }
                     }
                     // Assemble: prefix + bridge copy + suffix
@@ -1335,6 +1348,11 @@ void PerimeterGenerator::process_arachne(
                     continue;
                 pre_pass_paths.push_back(std::move(copy));
             }
+            // Remove source paths fully consumed by anchor borrows.
+            if (anchor_len > 0)
+                lpaths.erase(std::remove_if(lpaths.begin(), lpaths.end(),
+                    [](const ExtrusionPath &p) { return p.polyline.points.size() < 2; }),
+                    lpaths.end());
         }
         extrusion_coll.append(std::move(pre_pass_paths));
     }
@@ -1709,29 +1727,42 @@ void PerimeterGenerator::process_classic(
                             copy_attrs.height      = attrs.height;
                             copy.set_attributes(copy_attrs);
                             // Build anchor from actual neighbouring non-bridge loop paths
-                            // rather than extrapolating into air.
+                            // rather than extrapolating into air. The borrowed segments are
+                            // clipped from the source paths: the anchor zone is deposited only
+                            // by the two half-flow passes (0.5x + 0.5x = 1x nominal), never
+                            // again by the owning perimeter path.
                             if (anchor_len > 0) {
                                 // Prefix anchor: tail of the preceding non-bridge path
                                 Points anchor_prefix;
                                 const size_t prev_i = (i == 0) ? n - 1 : i - 1;
-                                const ExtrusionPath &prev_path = loop->paths[prev_i];
-                                if (!prev_path.role().is_bridge() && !prev_path.polyline.points.empty()) {
+                                ExtrusionPath &prev_path = loop->paths[prev_i];
+                                if (!prev_path.role().is_bridge() && prev_path.polyline.points.size() >= 2) {
                                     Polyline prev_poly = prev_path.polyline;
-                                    double prev_len = prev_poly.length();
-                                    if (prev_len > double(anchor_len))
-                                        prev_poly.clip_start(prev_len - double(anchor_len));
-                                    anchor_prefix = std::move(prev_poly.points);
+                                    const double prev_len = prev_poly.length();
+                                    const double borrowed_prev = std::min(double(anchor_len), prev_len);
+                                    if (borrowed_prev > 0.) {
+                                        if (prev_len > double(anchor_len))
+                                            prev_poly.clip_start(prev_len - double(anchor_len));
+                                        anchor_prefix = std::move(prev_poly.points);
+                                        // Remove the borrowed tail from the source path.
+                                        prev_path.polyline.clip_end(borrowed_prev);
+                                    }
                                 }
                                 // Suffix anchor: head of the following non-bridge path
                                 Points anchor_suffix;
                                 const size_t next_i = (i + 1) % n;
-                                const ExtrusionPath &next_path = loop->paths[next_i];
-                                if (!next_path.role().is_bridge() && !next_path.polyline.points.empty()) {
+                                ExtrusionPath &next_path = loop->paths[next_i];
+                                if (!next_path.role().is_bridge() && next_path.polyline.points.size() >= 2) {
                                     Polyline next_poly = next_path.polyline;
-                                    double next_len = next_poly.length();
-                                    if (next_len > double(anchor_len))
-                                        next_poly.clip_end(next_len - double(anchor_len));
-                                    anchor_suffix = std::move(next_poly.points);
+                                    const double next_len = next_poly.length();
+                                    const double borrowed_next = std::min(double(anchor_len), next_len);
+                                    if (borrowed_next > 0.) {
+                                        if (next_len > double(anchor_len))
+                                            next_poly.clip_end(next_len - double(anchor_len));
+                                        anchor_suffix = std::move(next_poly.points);
+                                        // Remove the borrowed head from the source path.
+                                        next_path.polyline.clip_start(borrowed_next);
+                                    }
                                 }
                                 // Assemble: prefix + bridge copy + suffix
                                 Points assembled;
@@ -1756,6 +1787,11 @@ void PerimeterGenerator::process_classic(
                             pre_pass_paths.push_back(std::move(copy));
                         }
                     }
+                    // Remove source paths fully consumed by anchor borrows.
+                    if (anchor_len > 0)
+                        loop->paths.erase(std::remove_if(loop->paths.begin(), loop->paths.end(),
+                            [](const ExtrusionPath &p) { return p.polyline.points.size() < 2; }),
+                            loop->paths.end());
                 }
             }
             entities.append(std::move(pre_pass_paths));
