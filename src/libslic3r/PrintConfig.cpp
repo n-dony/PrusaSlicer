@@ -804,9 +804,10 @@ void PrintConfigDef::init_fff_params()
     def = this->add("bridge_anchor_length", coFloat);
     def->label = L("Bridge anchor length");
     def->category = L("Speed");
-    def->tooltip = L("[Experimental] Extend bridge infill endpoints by this length into the adjacent "
-                     "perimeter to improve adhesion at bridge start/end points. The bridge "
-                     "overprints the perimeter by this amount; set to 0 to disable."
+    def->tooltip = L("[Experimental] Extend the two-pass bridge perimeter passes by this length into "
+                     "the adjacent perimeter to improve adhesion at bridge start/end points. Applies "
+                     "only to perimeter extrusions (two-pass bridge scope), never to bridge infill. "
+                     "The bridge overprints the perimeter by this amount; set to 0 to disable."
                      " Not clipped against model boundaries — keep small near narrow perimeters.");
     def->sidetext = L("mm");
     def->min = 0;
