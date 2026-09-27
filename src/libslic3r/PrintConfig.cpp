@@ -2269,9 +2269,10 @@ void PrintConfigDef::init_fff_params()
     def = this->add("combine_perimeters_overlap_percent", coPercent);
     def->label = L("Combine perimeters overlap");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Allowed horizontal overlap percentage when combining perimeters across layers. A larger value (e.g. 100%) allows combining on sloped walls, while a smaller value (e.g. 50%) restricts combining to near-vertical walls.");
+    def->tooltip = L("Minimum footprint overlap required between the combined layers' perimeters, as a percentage of the nominal perimeter extrusion width. 100% combines only perfectly vertical walls (the perimeters must coincide); 50% accepts a horizontal shift of half the extrusion width; 0% requires no overlap but the beads must still touch — the loosest setting. Smaller values combine more, larger values restrict combining to straighter walls.");
     def->sidetext = L("%");
     def->min = 0;
+    def->max = 100;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionPercent(50));
 
