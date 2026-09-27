@@ -742,6 +742,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "external_perimeter_every_layers"
             || opt_key == "first_internal_perimeter_every_layers"
             || opt_key == "second_internal_perimeter_every_layers"
+            || opt_key == "automatic_perimeter_combination"
             || opt_key == "combine_perimeters_overlap_percent"
             || opt_key == "high_def_print") {
             steps.emplace_back(posPerimeters);
@@ -3418,13 +3419,10 @@ void PrintObject::combine_perimeters()
                 }
             };
 
-            // Stage 2: geometry check and apply.
-            for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
-                m_print->throw_if_canceled();
-                const size_t n = combine[top_idx];
-                if (n <= 1)
-                    continue;
-                const size_t group_start = top_idx + 1 - n;
+            // Stage 2: geometry check and apply. The body is a lambda so the automatic
+            // mode can trial smaller windows: each every-N-layers value is the maximum
+            // group size, and the geometry decides the actual size.
+            auto try_combine_window = [&](size_t group_start, size_t top_idx) -> bool {
 
                 // Two-way coverage check: only combine when every sub-layer path is
                 // geometrically covered by a top-layer path and vice versa.
@@ -3458,12 +3456,12 @@ void PrintObject::combine_perimeters()
                             if (has_mixed_loop) break;
                         }
                     }
-                    if (has_mixed_loop) continue;
+                    if (has_mixed_loop) return false;
                 }
 
                 // Only proceed when the top layer has perimeters for this region.
                 LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
-                if (top_rm->m_perimeters.entities.empty()) continue;
+                if (top_rm->m_perimeters.entities.empty()) return false;
 
                 // Collect polylines from role-matching, non-empty paths in a region.
                 auto collect_polylines = [&](LayerRegion *rm) -> Polylines {
@@ -3521,7 +3519,7 @@ void PrintObject::combine_perimeters()
                 };
 
                 Polylines top_polylines = collect_polylines(top_rm);
-                if (top_polylines.empty()) continue;
+                if (top_polylines.empty()) return false;
                 Polygons  top_mask      = build_mask(top_rm, mask_half_width);
 
                 bool window_ok = true;
@@ -3535,7 +3533,7 @@ void PrintObject::combine_perimeters()
                     // Top→sub: top-layer paths must not overhang sub-layer geometry.
                     if (!passes_tolerance(diff_pl(top_polylines, sub_mask))) { window_ok = false; break; }
                 }
-                if (!window_ok) continue;
+                if (!window_ok) return false;
 
                 // Sum actual layer heights for correct combined flow (not n * top_height).
                 double H = 0.;
@@ -3628,6 +3626,54 @@ void PrintObject::combine_perimeters()
                             else ++it;
                         }
                     }
+                }
+                return true;
+            };
+
+            if (! cfg.automatic_perimeter_combination) {
+                // Fixed groups: every N layers (height-capped). A group that fails the
+                // coverage check is not combined at all.
+                for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
+                    m_print->throw_if_canceled();
+                    const size_t n = combine[top_idx];
+                    if (n <= 1)
+                        continue;
+                    try_combine_window(top_idx + 1 - n, top_idx);
+                }
+            } else {
+                // Automatic combination: each every-N-layers value is the MAXIMUM group
+                // size; the overlap check decides the actual size. Sliding greedy scan:
+                // from each layer take the largest group (within the maximum and the
+                // nozzle height cap) whose coverage check passes; if none does, the
+                // layer stays uncombined and the scan advances by one. Vertical walls
+                // combine at the maximum, sloped walls in smaller groups, steep zones
+                // not at all.
+                size_t start = 0;
+                while (start < m_layers.size()) {
+                    m_print->throw_if_canceled();
+                    if (m_layers[start]->id() == 0) {
+                        ++ start;
+                        continue;
+                    }
+                    size_t s_max = 0;
+                    double height_sum = 0.;
+                    for (size_t s = 1; start + s - 1 < m_layers.size() && s <= size_t(spec.every_layers); ++ s) {
+                        const Layer &layer = *m_layers[start + s - 1];
+                        if (layer.id() == 0)
+                            break;
+                        height_sum += layer.height;
+                        if (s > 1 && height_sum >= max_combine_h + EPSILON)
+                            break;
+                        s_max = s;
+                    }
+                    bool combined = false;
+                    for (size_t s = s_max; s >= 2 && ! combined; -- s)
+                        if (try_combine_window(start, start + s - 1)) {
+                            combined = true;
+                            start += s;
+                        }
+                    if (! combined)
+                        ++ start;
                 }
             }
         }
