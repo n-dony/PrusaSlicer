@@ -3475,29 +3475,40 @@ void PrintObject::combine_perimeters()
                     return result;
                 };
 
-                // Build a Polygons coverage mask from role-matching paths.
-                // polygons_covered_by_width() offsets by width/2 — the correct radius —
-                // plus extra_offset, which inflates the mask by a configurable tolerance
-                // so that perimeters shifted horizontally by sloped walls still combine.
-                auto build_mask = [&](LayerRegion *rm, float extra_offset) -> Polygons {
+                // Build a displacement mask from role-matching paths: each centerline
+                // expanded by exactly the accepted displacement (mask_half_width), not by
+                // the bead footprint — the coverage test below is centerline-vs-mask, so
+                // the mask radius is the accepted displacement, kept independent of
+                // per-path widths.
+                auto build_mask = [&](LayerRegion *rm, float half_width) -> Polygons {
                     Polygons mask;
                     walk(rm, [&](ExtrusionPath &path) {
                         if (role_matches(path.role()) && !path.polyline.empty())
-                            path.polygons_covered_by_width(mask, extra_offset);
+                            polygons_append(mask, offset(path.polyline, half_width));
                     });
                     return union_(mask);
                 };
 
-                // Tolerance: horizontal shift accepted between sub-layer and top-layer
-                // perimeters, as a percentage of the extrusion width. The coverage
-                // masks are inflated by this amount before the diff, so walls sloped by
-                // up to (percent/100) × width per combine group still pass. Residual
-                // diff fragments (numeric noise) must stay within a small fraction
-                // of the width: longest ≤ 0.25 × width, total ≤ 0.5 × width.
+                // combine_perimeters_overlap_percent is the minimum footprint OVERLAP
+                // required between the sub-layer and top-layer perimeters, as a percentage
+                // of the nominal perimeter extrusion width: 100% means the perimeters
+                // must be numerically coincident within the geometry tolerance (only
+                // perfectly vertical walls combine), 0% means no overlap is required but
+                // the beads must still touch (loosest). A required overlap of X accepts a
+                // horizontal centerline displacement of (1 − X/100) × width. The test is
+                // centerline-vs-mask (diff_pl of the centerlines against the masks), so
+                // the mask radius IS the accepted displacement: each centerline is
+                // expanded by exactly that, independent of per-path widths (Arachne
+                // variable-width paths would otherwise drift the semantics by
+                // (w_path − w_nominal)/2). The radius is floored at a few nanometres
+                // (SCALING_FACTOR is 1e-6, so 5 units = 5 nm) so 100% still admits
+                // exactly coincident walls — a zero Clipper offset would vanish.
+                // Residual diff fragments (numeric noise) must stay within a small
+                // fraction of the width: longest ≤ 0.25 × width, total ≤ 0.5 × width.
                 const float width_scaled = m_layers[top_idx]->m_regions[region_id]
                     ->flow(flow_role).scaled_width();
-                const float tol_scaled = float(cfg.combine_perimeters_overlap_percent.value)
-                    / 100.f * width_scaled;
+                const float overlap = float(cfg.combine_perimeters_overlap_percent.value) / 100.f;
+                const float mask_half_width = std::max(width_scaled * (1.f - overlap), 5.f);
                 const float tol_half = 0.25f * width_scaled;
                 auto passes_tolerance = [&](Polylines &&diff) -> bool {
                     double total = 0., longest = 0.;
@@ -3511,14 +3522,14 @@ void PrintObject::combine_perimeters()
 
                 Polylines top_polylines = collect_polylines(top_rm);
                 if (top_polylines.empty()) continue;
-                Polygons  top_mask      = build_mask(top_rm, tol_scaled);
+                Polygons  top_mask      = build_mask(top_rm, mask_half_width);
 
                 bool window_ok = true;
                 for (size_t i = group_start; i < top_idx && window_ok; ++i) {
                     LayerRegion *sub_rm       = m_layers[i]->m_regions[region_id];
                     Polylines    sub_polylines = collect_polylines(sub_rm);
                     if (sub_polylines.empty()) { window_ok = false; break; }
-                    Polygons sub_mask = build_mask(sub_rm, tol_scaled);
+                    Polygons sub_mask = build_mask(sub_rm, mask_half_width);
                     // Sub→top: every sub-layer path must lie under a top-layer replacement.
                     if (!passes_tolerance(diff_pl(sub_polylines, top_mask))) { window_ok = false; break; }
                     // Top→sub: top-layer paths must not overhang sub-layer geometry.
