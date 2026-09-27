@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <numeric>
+#include <cmath>
 #include <sstream>
 
 #include "libslic3r/Config.hpp"
@@ -757,10 +758,11 @@ static Slic3r::TriangleMesh make_frustum(float base_half, float top_half, float 
 SCENARIO("Fork: combine_perimeters_overlap_percent displacement matrix", "[Perimeters]")
 {
     // Layer height 0.15 (two-layer groups of 0.3 fit under the 0.4 nozzle cap),
-    // perimeter width pinned to 0.4. The only extrusion height other than the pinned
-    // layer height in these models is the combined groups' double height (no bridges,
-    // first layer pinned to 0.15, infill not combined), so any ";HEIGHT:" tag greater
-    // than the layer height means perimeters combined.
+    // perimeter width pinned to 0.4. Combined perimeters emit a path-height tag
+    // of exactly 0.3 (two pinned 0.15 layers); the sloped model also emits a
+    // 0.4 path-height tag from an overhang-flow path, which is NOT a combine.
+    // Match the combined height exactly instead of "anything above the layer
+    // height" so the overhang tag cannot produce a false positive.
     auto config_with = [](int overlap_percent) {
         return Slic3r::DynamicPrintConfig::full_print_config_with({
             { "skirts",                                 0 },
@@ -780,20 +782,23 @@ SCENARIO("Fork: combine_perimeters_overlap_percent displacement matrix", "[Perim
         size_t pos = 0;
         while ((pos = gcode.find(";HEIGHT:", pos)) != std::string::npos) {
             const double height = std::stod(gcode.substr(pos + 8));
-            if (height > 0.15 + 1e-6)
+            if (std::abs(height - 0.3) < 1e-6)
                 return true;
             ++ pos;
         }
         return false;
     };
 
-    // Walls shift 0.20 w per layer (shift 0.08 mm, wall angle ~28 degrees):
-    // pass 0% (1.00 w), 50% (0.50 w), 75% (0.25 w); fail 100% (~0).
-    Slic3r::Model shallow = Slic3r::Test::model("frustum_shallow", make_frustum(10.f, 6.8f, 6.f));
+    // Walls shift 0.20 w per layer (shift 0.08 mm, wall angle ~28 degrees), corners
+    // shift sqrt(2) x that = 0.28 w: pass 0% (1.00 w), 50% (0.50 w), 75% (0.25 w —
+    // the tiny corner overshoot falls inside the residual-fragment tolerance);
+    // fail 100% (~0).
+    Slic3r::TriangleMesh shallow_mesh = make_frustum(10.f, 6.8f, 6.f);
     // Walls shift 0.40 w per layer (shift 0.16 mm, wall angle ~47 degrees, still below
-    // the overhang role-splitting range so the internal paths keep their roles):
-    // pass 0% (1.00 w), 50% (0.50 w); fail 75% (0.25 w), 100% (~0).
-    Slic3r::Model sloped = Slic3r::Test::model("frustum_sloped", make_frustum(10.f, 3.6f, 6.f));
+    // the overhang role-splitting range so the internal paths keep their roles).
+    // Corners shift sqrt(2) x that = 0.57 w, so only the loosest setting passes:
+    // pass 0% (1.00 w); fail 50% (0.50 w), 75% (0.25 w), 100% (~0).
+    Slic3r::TriangleMesh sloped_mesh = make_frustum(10.f, 3.6f, 6.f);
 
     GIVEN("Perfectly vertical walls (cube)") {
         THEN("combine at 100% — coincident perimeters pass the strictest overlap") {
@@ -805,27 +810,27 @@ SCENARIO("Fork: combine_perimeters_overlap_percent displacement matrix", "[Perim
     }
     GIVEN("Walls shifting 0.20 w per layer") {
         THEN("do not combine at 100%") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ shallow }, config_with(100))));
+            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(100))));
         }
         THEN("combine at 75% (accepted shift 0.25 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow }, config_with(75))));
+            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(75))));
         }
         THEN("combine at 50% (accepted shift 0.50 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow }, config_with(50))));
+            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(50))));
         }
     }
     GIVEN("Walls shifting 0.40 w per layer") {
         THEN("do not combine at 100%") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped }, config_with(100))));
+            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(100))));
         }
         THEN("do not combine at 75% (accepted shift 0.25 w)") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped }, config_with(75))));
+            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(75))));
         }
-        THEN("combine at 50% (accepted shift 0.50 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ sloped }, config_with(50))));
+        THEN("do not combine at 50% (corner shift 0.57 w exceeds accepted 0.50 w)") {
+            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(50))));
         }
         THEN("combine at 0% (accepted shift 1.00 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ sloped }, config_with(0))));
+            REQUIRE(perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(0))));
         }
     }
 }
