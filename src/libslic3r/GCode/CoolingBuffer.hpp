@@ -52,7 +52,7 @@ private:
     float       calculate_layer_slowdown(std::vector<PerExtruderAdjustments> &per_extruder_adjustments);
     // Apply slow down over G-code lines stored in per_extruder_adjustments, enable fan if needed.
     // Returns the adjusted G-code.
-    std::string apply_layer_cooldown(const std::string &gcode, size_t layer_id, float layer_time, std::vector<PerExtruderAdjustments> &per_extruder_adjustments);
+    std::string apply_layer_cooldown(const std::string &gcode, size_t layer_id, std::vector<PerExtruderAdjustments> &per_extruder_adjustments);
 
     // G-code snippet cached for the support layers preceding an object layer.
     std::string                 m_gcode;
@@ -60,6 +60,12 @@ private:
     // Set by process_layer when flush=false (sub-layer); reset to 0 after each flush.
     // Used by the TopLayerCeiling combine-group cooling mode.
     size_t                      m_sub_layers_end { 0 };
+    // Byte offsets in m_gcode where each buffered physical layer's chunk starts, and
+    // the matching layer ids (one entry per process_layer call since the last flush).
+    // Used to emit a per-layer fan level: the fan follows each layer's own print time,
+    // never the combine group's total.
+    std::vector<size_t>         m_layer_starts;
+    std::vector<size_t>         m_layer_ids;
     // Internal data.
     std::vector<char>           m_axis;
     enum AxisIdx : int {

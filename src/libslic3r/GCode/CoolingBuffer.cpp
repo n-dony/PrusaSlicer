@@ -566,6 +566,12 @@ finished:
 
 std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer)
 {
+    // Record where this physical layer's chunk starts and its id, so the flush can emit
+    // a per-layer fan level: the fan follows each layer's own print time, never the
+    // combine group's total.
+    m_layer_starts.push_back(m_gcode.size());
+    m_layer_ids.push_back(layer_id);
+
     // Cache the input G-code.
     if (m_gcode.empty())
         m_gcode = std::move(gcode);
@@ -589,8 +595,6 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
         CoolingCombineLogicType combine_logic = CoolingCombineLogicType::GroupTime;
         if (!m_extruder_ids.empty())
             combine_logic = m_config.cooling_combine_logic.get_at(m_extruder_ids[0]);
-
-        float layer_time_stretched;
 
         if (combine_logic == CoolingCombineLogicType::TopLayerCeiling && m_sub_layers_end > 0) {
             // === TopLayerCeiling mode ===
@@ -692,22 +696,21 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
                 }
             }
 
-            // 6. Sum total group time for fan control (same as GroupTime — one fan level for group).
-            layer_time_stretched = 0.f;
-            for (const auto &adj : all_adj)
-                layer_time_stretched += adj.elapsed_time_total();
-
         } else {
             // === GroupTime mode (default) ===
             // For combine groups, m_gcode contains all N physical layers concatenated.
             // parse_layer_gcode returns their combined time, so calculate_layer_slowdown
             // compares the whole group's time against T — no threshold scaling needed.
-            layer_time_stretched = this->calculate_layer_slowdown(all_adj);
+            // The fan is per physical layer, not per group: apply_layer_cooldown derives
+            // each buffered layer's own time from m_layer_starts.
+            this->calculate_layer_slowdown(all_adj);
         }
 
-        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, all_adj);
+        out = this->apply_layer_cooldown(m_gcode, layer_id, all_adj);
         m_gcode.clear();
         m_sub_layers_end = 0;
+        m_layer_starts.clear();
+        m_layer_ids.clear();
     }
     return out;
 }
@@ -1250,8 +1253,6 @@ std::string CoolingBuffer::apply_layer_cooldown(
     const std::string                      &gcode,
     // ID of the current layer, used to disable fan for the first n layers.
     size_t                                  layer_id,
-    // Total time of this layer after slow down, used to control the fan.
-    float                                   layer_time,
     // Per extruder list of G-code lines and their cool down attributes.
     std::vector<PerExtruderAdjustments>    &per_extruder_adjustments)
 {
@@ -1272,7 +1273,45 @@ std::string CoolingBuffer::apply_layer_cooldown(
     new_gcode.reserve(gcode.size() * 2);
     bool bridge_fan_control = false;
     int  bridge_fan_speed   = 0;
-    auto change_extruder_set_fan = [this, layer_id, layer_time, &new_gcode, &bridge_fan_control, &bridge_fan_speed](const int requested_fan_speed = -1) {
+    // Per-physical-layer times and ids for the fan: each buffered layer's own elapsed
+    // time after slowdown — never the combine group's total, so a fast sub-layer of a
+    // combine group gets its own (higher) fan and the thick group top its own. A
+    // single-layer flush has one entry and degenerates to the previous behavior. If
+    // m_layer_starts is empty (unexpected), fall back to one segment covering the
+    // whole buffered text with its total time and the chunk's layer id.
+    std::vector<float>   layer_times;
+    std::vector<size_t>  fan_layer_ids;
+    if (m_layer_starts.empty()) {
+        float time_total = 0.f;
+        for (const PerExtruderAdjustments &adj : per_extruder_adjustments)
+            time_total += adj.elapsed_time_total();
+        layer_times.push_back(time_total);
+        fan_layer_ids.push_back(layer_id);
+    } else {
+        layer_times.assign(m_layer_starts.size(), 0.f);
+        fan_layer_ids = m_layer_ids;
+        for (const PerExtruderAdjustments &adj : per_extruder_adjustments)
+            for (const CoolingLine &line : adj.lines) {
+                const auto it = std::upper_bound(m_layer_starts.begin(), m_layer_starts.end(), line.line_start);
+                layer_times[size_t(it - m_layer_starts.begin()) - 1] += line.time();
+            }
+        if (fan_layer_ids.size() != m_layer_starts.size())
+            fan_layer_ids.assign(m_layer_starts.size(), layer_id);
+    }
+    auto layer_time_at = [&layer_times, this](size_t offset) -> float {
+        if (m_layer_starts.empty())
+            return layer_times.front();
+        const auto it = std::upper_bound(m_layer_starts.begin(), m_layer_starts.end(), offset);
+        return layer_times[size_t(it - m_layer_starts.begin()) - 1];
+    };
+    auto fan_layer_id_at = [&fan_layer_ids, this](size_t offset) -> size_t {
+        if (m_layer_starts.empty())
+            return fan_layer_ids.front();
+        const auto it = std::upper_bound(m_layer_starts.begin(), m_layer_starts.end(), offset);
+        return fan_layer_ids[size_t(it - m_layer_starts.begin()) - 1];
+    };
+
+    auto change_extruder_set_fan = [this, &new_gcode, &bridge_fan_control, &bridge_fan_speed](const int requested_fan_speed, const float layer_time, const size_t fan_layer_id) {
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_current_extruder)
         const int min_fan_speed            = EXTRUDER_CONFIG(min_fan_speed);
         // Is the fan speed ramp enabled?
@@ -1293,7 +1332,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
             // so there will be a zero fan speed at least at the 1st layer.
             disable_fan_first_layers = 1;
         }
-        if (int(layer_id) >= disable_fan_first_layers) {
+        if (int(fan_layer_id) >= disable_fan_first_layers) {
             int   max_fan_speed             = EXTRUDER_CONFIG(max_fan_speed);
             float slowdown_below_layer_time = float(EXTRUDER_CONFIG(slowdown_below_layer_time));
             float fan_below_layer_time      = float(EXTRUDER_CONFIG(fan_below_layer_time));
@@ -1313,9 +1352,9 @@ std::string CoolingBuffer::apply_layer_cooldown(
             }
 
             bridge_fan_speed = EXTRUDER_CONFIG(bridge_fan_speed);
-            if (int(layer_id) >= disable_fan_first_layers && int(layer_id) + 1 < full_fan_speed_layer) {
+            if (int(fan_layer_id) >= disable_fan_first_layers && int(fan_layer_id) + 1 < full_fan_speed_layer) {
                 // Ramp up the fan speed from disable_fan_first_layers to full_fan_speed_layer.
-                const float factor = float(int(layer_id + 1) - disable_fan_first_layers) / float(full_fan_speed_layer - disable_fan_first_layers);
+                const float factor = float(int(fan_layer_id + 1) - disable_fan_first_layers) / float(full_fan_speed_layer - disable_fan_first_layers);
 
                 fan_speed_new                        = std::clamp(int(float(fan_speed_new) * factor + 0.5f), 0, 100);
                 bridge_fan_speed                     = std::clamp(int(float(bridge_fan_speed) * factor + 0.5f), 0, 100);
@@ -1345,7 +1384,21 @@ std::string CoolingBuffer::apply_layer_cooldown(
     const char         *pos               = gcode.c_str();
     int                 current_feedrate  = 0;
 
-    change_extruder_set_fan();
+    // Append a raw-text gap, emitting the per-layer fan level at every physical-layer
+    // boundary it contains. The fan for segment 0 is emitted by the initial call below.
+    auto append_gap = [&](const char *from, const char *to) {
+        for (size_t i = 1; i < m_layer_starts.size(); ++ i) {
+            const size_t boundary = m_layer_starts[i];
+            if (boundary > size_t(from - gcode.c_str()) && boundary <= size_t(to - gcode.c_str())) {
+                new_gcode.append(from, gcode.c_str() + boundary - from);
+                change_extruder_set_fan(-1, layer_times[i], fan_layer_ids[i]);
+                from = gcode.c_str() + boundary;
+            }
+        }
+        new_gcode.append(from, to - from);
+    };
+
+    change_extruder_set_fan(-1, layer_times.front(), fan_layer_ids.front());
 
     const CoolingLine *line_waiting_for_split = nullptr;
     for (const CoolingLine *line : lines) {
@@ -1405,7 +1458,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
 
                 line_waiting_for_split = nullptr;
             } else {
-                new_gcode.append(pos, line_start - pos);
+                append_gap(pos, line_start);
             }
         }
 
@@ -1416,13 +1469,13 @@ std::string CoolingBuffer::apply_layer_cooldown(
             auto res = std::from_chars(toolchange_line.data() + m_toolchange_prefix.size(), toolchange_line.data() + toolchange_line.size(), new_extruder);
             if (res.ec != std::errc::invalid_argument && new_extruder != m_current_extruder) {
                 m_current_extruder = new_extruder;
-                change_extruder_set_fan();
+                change_extruder_set_fan(-1, layer_time_at(line->line_start), fan_layer_id_at(line->line_start));
             }
             new_gcode.append(line_start, line_end - line_start);
         } else if (line->type & CoolingLine::TYPE_SET_FAN_SPEED) {
-            change_extruder_set_fan(line->fan_speed);
+            change_extruder_set_fan(line->fan_speed, layer_time_at(line->line_start), fan_layer_id_at(line->line_start));
         } else if (line->type & CoolingLine::TYPE_RESET_FAN_SPEED){
-            change_extruder_set_fan();
+            change_extruder_set_fan(-1, layer_time_at(line->line_start), fan_layer_id_at(line->line_start));
         } else if (line->type & CoolingLine::TYPE_BRIDGE_FAN_START) {
             if (bridge_fan_control)
                 new_gcode += GCodeWriter::set_fan(m_config.gcode_flavor, m_config.gcode_comments, bridge_fan_speed);
@@ -1433,7 +1486,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
             // Custom toolchange gcode may have changed fan speed via M106/M107 that CoolingBuffer
             // doesn't track. Force re-emission to restore the correct fan speed.
             m_fan_speed = -1;
-            change_extruder_set_fan();
+            change_extruder_set_fan(-1, layer_time_at(line->line_start), fan_layer_id_at(line->line_start));
         } else if (line->type & (CoolingLine::TYPE_EXTRUDE_END | CoolingLine::TYPE_TOOLCHANGE_TIME)) {
             // Just remove this comment.
         } else if (line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_ADJUSTABLE_EMPTY | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_FIRST_INTERNAL_PERIMETER | CoolingLine::TYPE_WIPE | CoolingLine::TYPE_HAS_F)) {
@@ -1532,7 +1585,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
     }
     const char *gcode_end = gcode.c_str() + gcode.size();
     if (pos < gcode_end)
-        new_gcode.append(pos, gcode_end - pos);
+        append_gap(pos, gcode_end);
 
     // There should be no empty G1 lines emitted.
     assert(new_gcode.find("G1\n") == std::string::npos);
