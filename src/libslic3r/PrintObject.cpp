@@ -3423,7 +3423,6 @@ void PrintObject::combine_perimeters()
             // mode can trial smaller windows: each every-N-layers value is the maximum
             // group size, and the geometry decides the actual size.
             auto try_combine_window = [&](size_t group_start, size_t top_idx) -> bool {
-
                 // Two-way coverage check: only combine when every sub-layer path is
                 // geometrically covered by a top-layer path and vice versa.
                 // Masks are built from actual path geometry — NOT fill_expolygons,
@@ -3477,12 +3476,17 @@ void PrintObject::combine_perimeters()
                 // expanded by exactly the accepted displacement (mask_half_width), not by
                 // the bead footprint — the coverage test below is centerline-vs-mask, so
                 // the mask radius is the accepted displacement, kept independent of
-                // per-path widths.
+                // per-path widths. End caps must be ROUND: the collected polylines are loop
+                // segments split at the seam, and the default butt cap cuts the mask flush
+                // at the polyline end — the sub-layer's seam-corner segments then stick out
+                // of the top mask as false fragments the width of the wall shift, rejecting
+                // perfectly parallel walls. etOpenRound extends the cap by the radius past
+                // the end, covering the seam region.
                 auto build_mask = [&](LayerRegion *rm, float half_width) -> Polygons {
                     Polygons mask;
                     walk(rm, [&](ExtrusionPath &path) {
                         if (role_matches(path.role()) && !path.polyline.empty())
-                            polygons_append(mask, offset(path.polyline, half_width));
+                            polygons_append(mask, offset(path.polyline, half_width, DefaultLineJoinType, DefaultLineMiterLimit, ClipperLib::etOpenRound));
                     });
                     return union_(mask);
                 };

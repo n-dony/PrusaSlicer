@@ -273,3 +273,145 @@ SCENARIO("Cooling integration tests", "[Cooling]") {
         }
     }
 }
+
+// Collect the emitted feedrates (mm/min) of all XY extrusion moves in the given G-code.
+static std::vector<int> extrusion_feedrates_mm_per_min(const std::string &gcode)
+{
+    std::vector<int> feedrates;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&feedrates](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (line.cmd() != "G1")
+            return;
+        const std::string &raw = line.raw();
+        const size_t       comment = raw.find(';');
+        const std::string  cmd_part = raw.substr(0, comment == std::string::npos ? raw.size() : comment);
+        if (cmd_part.find('E') != std::string::npos &&
+            (cmd_part.find('X') != std::string::npos || cmd_part.find('Y') != std::string::npos)) {
+            const float f = line.new_F(self);
+            if (f > 0.f)
+                feedrates.push_back(int(f + 0.5f));
+        }
+    });
+    return feedrates;
+}
+
+SCENARIO("Fork: saturating slowdown must never go below min_print_speed", "[Cooling]")
+{
+    // A slowdown target far above any achievable layer time saturates the slowdown:
+    // every adjustable line is slowed to its floor. No emitted extrusion feedrate may
+    // end up below min_print_speed (15 mm/s = F900), whatever the slowdown logic.
+    auto config = DynamicPrintConfig::full_print_config_with({
+        { "cooling",                     "1" },
+        { "min_print_speed",             15 },
+        { "slowdown_below_layer_time",    100 },
+        { "disable_fan_first_layers",    "0" }
+    });
+
+    GIVEN("uniform cooling, one speed block") {
+        config.set_deserialize_strict({ { "cooling_slowdown_logic", "uniform_cooling" } });
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        std::string gcode = buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n", 1, true);
+        THEN("no extrusion feedrate is below min_print_speed") {
+            for (const int f : extrusion_feedrates_mm_per_min(gcode))
+                REQUIRE(f >= 899);
+        }
+    }
+
+    GIVEN("uniform cooling, two speed blocks at different speeds") {
+        config.set_deserialize_strict({ { "cooling_slowdown_logic", "uniform_cooling" } });
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        std::string gcode = buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n"
+            "G1 F1800;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n", 1, true);
+        THEN("no extrusion feedrate is below min_print_speed") {
+            for (const int f : extrusion_feedrates_mm_per_min(gcode))
+                REQUIRE(f >= 899);
+        }
+    }
+
+    GIVEN("deferred combine group, uniform cooling, saturating slowdown") {
+        // The fork's combine-group shape: a sub-layer chunk buffered without flush,
+        // the group top flushed with it — the whole group slowed as one unit.
+        config.set_deserialize_strict({ { "cooling_slowdown_logic", "uniform_cooling" } });
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n", 1, false, true);
+        std::string gcode = buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n", 2, true, false);
+        THEN("no extrusion feedrate is below min_print_speed") {
+            const std::vector<int> feedrates = extrusion_feedrates_mm_per_min(gcode);
+            REQUIRE(! feedrates.empty());
+            for (const int f : feedrates) {
+                INFO("feedrate " << f << " mm/min");
+                REQUIRE(f >= 899);
+            }
+        }
+    }
+
+    GIVEN("uniform cooling, many short lines at mixed speeds") {
+        config.set_deserialize_strict({ { "cooling_slowdown_logic", "uniform_cooling" } });
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        std::string gcode = buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X10 E1\n"
+            "G1 X20 E1\n"
+            "G1 X30 E1\n"
+            ";_EXTRUDE_END\n"
+            "G1 F4200;_EXTRUDE_SET_SPEED\n"
+            "G1 X10 E1\n"
+            "G1 X10 E1\n"
+            ";_EXTRUDE_END\n"
+            "G1 F1200;_EXTRUDE_SET_SPEED\n"
+            "G1 X10 E1\n"
+            ";_EXTRUDE_END\n", 1, true);
+        THEN("no extrusion feedrate is below min_print_speed") {
+            for (const int f : extrusion_feedrates_mm_per_min(gcode)) {
+                INFO("feedrate " << f << " mm/min");
+                REQUIRE(f >= 899);
+            }
+        }
+    }
+
+    GIVEN("consistent surface with a transition distance, long block, extra lines after") {
+        // A 100 mm block at F2700 with a 20 mm non-adjustable tail: the adjustable part
+        // slows down, the tail keeps its speed. Both emitted feedrates must be at or
+        // above min_print_speed — the split emission must not apply the adjustable
+        // part's feedrate to the whole move.
+        config.set_deserialize_strict({
+            { "cooling_slowdown_logic", "consistent_surface" },
+            { "cooling_perimeter_transition_distance", 20 },
+        });
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        std::string gcode = buffer->process_layer(
+            "G1 F2700;_EXTRUDE_SET_SPEED\n"
+            "G1 X100 E1\n"
+            ";_EXTRUDE_END\n"
+            "G1 F1200;_EXTRUDE_SET_SPEED\n"
+            "G1 X50 E1\n"
+            ";_EXTRUDE_END\n", 1, true);
+        THEN("no extrusion feedrate is below min_print_speed") {
+            const std::vector<int> feedrates = extrusion_feedrates_mm_per_min(gcode);
+            REQUIRE(! feedrates.empty());
+            for (const int f : feedrates) {
+                INFO("feedrate " << f << " mm/min");
+                REQUIRE(f >= 899);
+            }
+        }
+    }
+}
