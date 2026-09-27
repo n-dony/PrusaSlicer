@@ -14,6 +14,15 @@ namespace libvgcode {
 
 const ColorRange ColorRange::DUMMY_COLOR_RANGE = ColorRange();
 
+static float get_log_range_min(const std::array<float, 2>& range)
+{
+    // A logarithmic scale requires a positive lower bound. When the detected
+    // range minimum is zero or negative (e.g. actual speeds entering from a
+    // standstill), clamp it to a small fraction of the range maximum so that
+    // values at or below the true minimum still map to the first color.
+    return (range[0] > 0.0f) ? range[0] : std::max(range[1] * 1e-4f, FLT_MIN);
+}
+
 static float get_step_size(const ColorRange& color_range)
 {
     const std::array<float, 2>& range = color_range.get_range();
@@ -27,7 +36,9 @@ static float get_step_size(const ColorRange& color_range)
     }
     case EColorRangeType::Logarithmic:
     {
-        return (range[0] != 0.0f) ? std::log(range[1] / range[0]) / (static_cast<float>(palette.size()) - 1.0f) : 0.0f;
+        if (range[1] <= 0.0f)
+            return 0.0f;
+        return std::log(range[1] / get_log_range_min(range)) / (static_cast<float>(palette.size()) - 1.0f);
     }
     }
 }
@@ -62,8 +73,8 @@ Color ColorRange::get_color_at(float value) const
     const float step = get_step_size(*this);
     if (step > 0.0f) {
         if (m_type == EColorRangeType::Logarithmic) {
-            if (m_range[0] != 0.0f)
-                global_t = std::log(value / m_range[0]) / step;
+            const float range_min = get_log_range_min(m_range);
+            global_t = std::log(std::max(value, range_min) / range_min) / step;
         }
         else
             global_t = (value - m_range[0]) / step;
@@ -105,7 +116,7 @@ std::vector<float> ColorRange::get_values() const
             {
             default:
             case EColorRangeType::Linear:      { value = m_range[0] + static_cast<float>(i) * step_size; break; }
-            case EColorRangeType::Logarithmic: { value = ::exp(::log(m_range[0]) + static_cast<float>(i) * step_size);  break; }
+            case EColorRangeType::Logarithmic: { value = ::exp(::log(get_log_range_min(m_range)) + static_cast<float>(i) * step_size);  break; }
             }
             ret.emplace_back(value);
         }
