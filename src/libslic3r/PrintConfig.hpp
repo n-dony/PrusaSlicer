@@ -815,6 +815,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                  external_perimeter_every_layers))
     ((ConfigOptionInt,                  first_internal_perimeter_every_layers))
     ((ConfigOptionInt,                  second_internal_perimeter_every_layers))
+    ((ConfigOptionBool,                 automatic_perimeter_combination))
     ((ConfigOptionPercent,              combine_perimeters_overlap_percent))
     ((ConfigOptionFloatOrPercent,       infill_overlap))
     ((ConfigOptionFloat,                infill_speed))

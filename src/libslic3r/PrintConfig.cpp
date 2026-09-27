@@ -2266,6 +2266,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
+    def = this->add("automatic_perimeter_combination", coBool);
+    def->label = L("Automatic perimeter combination");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Combine internal perimeters adaptively. Each perimeter every-N-layers value becomes the maximum group size: vertical walls combine at the maximum, sloped walls in smaller groups that still pass the overlap check, and zones that cannot pair stay uncombined. When disabled, groups are fixed at N layers and a group that fails the overlap check is not combined at all.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("combine_perimeters_overlap_percent", coPercent);
     def->label = L("Combine perimeters overlap");
     def->category = L("Layers and Perimeters");
