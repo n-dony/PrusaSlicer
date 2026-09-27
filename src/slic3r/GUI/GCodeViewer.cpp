@@ -2450,14 +2450,16 @@ void GCodeViewer::render_legend(float& legend_height)
     std::vector<int> view_options_id;
     const std::vector<float> layers_times = get_layers_times();
     if (!layers_times.empty() && layers_times.size() == m_viewer.get_layers_count()) {
-        view_options = { _u8L("Feature type"), _u8L("Height (mm)"), _u8L("Width (mm)"), _u8L("Speed (mm/s)"), _u8L("Actual speed (mm/s)"),
+        view_options = { _u8L("Feature type"), _u8L("Height (mm)"), _u8L("Width (mm)"), _u8L("Speed (mm/s)"), _u8L("Speed (log) (mm/s)"), _u8L("Actual speed (mm/s)"), _u8L("Actual speed (log) (mm/s)"),
                          _u8L("Fan speed (%)"), _u8L("Temperature (°C)"), _u8L("Volumetric flow rate (mm³/s)"), _u8L("Actual volumetric flow rate (mm³/s)"),
                          _u8L("Layer time (linear)"), _u8L("Layer time (logarithmic)"), _u8L("Tool"), _u8L("Color Print") };
         view_options_id = { static_cast<int>(libvgcode::EViewType::FeatureType),
                             static_cast<int>(libvgcode::EViewType::Height),
                             static_cast<int>(libvgcode::EViewType::Width),
                             static_cast<int>(libvgcode::EViewType::Speed),
+                            static_cast<int>(libvgcode::EViewType::SpeedLogarithmic),
                             static_cast<int>(libvgcode::EViewType::ActualSpeed),
+                            static_cast<int>(libvgcode::EViewType::ActualSpeedLogarithmic),
                             static_cast<int>(libvgcode::EViewType::FanSpeed),
                             static_cast<int>(libvgcode::EViewType::Temperature),
                             static_cast<int>(libvgcode::EViewType::VolumetricFlowRate),
@@ -2468,14 +2470,16 @@ void GCodeViewer::render_legend(float& legend_height)
                             static_cast<int>(libvgcode::EViewType::ColorPrint) };
     }
     else {
-        view_options = { _u8L("Feature type"), _u8L("Height (mm)"), _u8L("Width (mm)"), _u8L("Speed (mm/s)"), _u8L("Actual speed (mm/s)"),
+        view_options = { _u8L("Feature type"), _u8L("Height (mm)"), _u8L("Width (mm)"), _u8L("Speed (mm/s)"), _u8L("Speed (log) (mm/s)"), _u8L("Actual speed (mm/s)"), _u8L("Actual speed (log) (mm/s)"),
                          _u8L("Fan speed (%)"), _u8L("Temperature (°C)"), _u8L("Volumetric flow rate (mm³/s)"), _u8L("Actual volumetric flow rate (mm³/s)"),
                          _u8L("Tool"), _u8L("Color Print") };
         view_options_id = { static_cast<int>(libvgcode::EViewType::FeatureType),
                             static_cast<int>(libvgcode::EViewType::Height),
                             static_cast<int>(libvgcode::EViewType::Width),
                             static_cast<int>(libvgcode::EViewType::Speed),
+                            static_cast<int>(libvgcode::EViewType::SpeedLogarithmic),
                             static_cast<int>(libvgcode::EViewType::ActualSpeed),
+                            static_cast<int>(libvgcode::EViewType::ActualSpeedLogarithmic),
                             static_cast<int>(libvgcode::EViewType::FanSpeed),
                             static_cast<int>(libvgcode::EViewType::Temperature),
                             static_cast<int>(libvgcode::EViewType::VolumetricFlowRate),
@@ -2543,7 +2547,9 @@ void GCodeViewer::render_legend(float& legend_height)
         case libvgcode::EViewType::Height:                   { append_range(m_viewer.get_color_range(libvgcode::EViewType::Height), 3); break; }
         case libvgcode::EViewType::Width:                    { append_range(m_viewer.get_color_range(libvgcode::EViewType::Width), 3); break; }
         case libvgcode::EViewType::Speed:                    { append_range(m_viewer.get_color_range(libvgcode::EViewType::Speed), 1); break; }
+        case libvgcode::EViewType::SpeedLogarithmic:         { append_range(m_viewer.get_color_range(libvgcode::EViewType::SpeedLogarithmic), 1); break; }
         case libvgcode::EViewType::ActualSpeed:              { append_range(m_viewer.get_color_range(libvgcode::EViewType::ActualSpeed), 1); break; }
+        case libvgcode::EViewType::ActualSpeedLogarithmic:   { append_range(m_viewer.get_color_range(libvgcode::EViewType::ActualSpeedLogarithmic), 1); break; }
         case libvgcode::EViewType::FanSpeed:                 { append_range(m_viewer.get_color_range(libvgcode::EViewType::FanSpeed), 0); break; }
         case libvgcode::EViewType::Temperature:              { append_range(m_viewer.get_color_range(libvgcode::EViewType::Temperature), 0); break; }
         case libvgcode::EViewType::VolumetricFlowRate:       { append_range(m_viewer.get_color_range(libvgcode::EViewType::VolumetricFlowRate), 3); break; }

@@ -282,7 +282,9 @@ private:
     ColorRange m_height_range;
     ColorRange m_width_range;
     ColorRange m_speed_range;
+    ColorRange m_speed_range_log{ EColorRangeType::Logarithmic };
     ColorRange m_actual_speed_range;
+    ColorRange m_actual_speed_range_log{ EColorRangeType::Logarithmic };
     ColorRange m_fan_speed_range;
     ColorRange m_temperature_range;
     ColorRange m_volumetric_rate_range;
