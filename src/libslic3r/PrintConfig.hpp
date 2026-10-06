@@ -1121,6 +1121,17 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloat,              z_offset))
 )
 
+// Two-pass bridges print each pass at layer_height / 2. That is only allowed when the half height
+// is not below the minimum layer height of the extruder printing it (extruder is 1-based; raw
+// min_layer_height of 0 means the default 0.07, same as Slicing.cpp).
+inline bool two_pass_height_allowed(const PrintConfig &config, int extruder_1based, double layer_height)
+{
+    double min_lh = config.min_layer_height.get_at(std::max(extruder_1based, 1) - 1);
+    if (min_lh == 0.)
+        min_lh = 0.07;
+    return layer_height * 0.5 + EPSILON >= std::max(0.01, min_lh);
+}
+
 PRINT_CONFIG_CLASS_DERIVED_DEFINE0(
     FullPrintConfig,
     (PrintObjectConfig, PrintRegionConfig, PrintConfig)

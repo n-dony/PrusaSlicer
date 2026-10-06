@@ -1252,7 +1252,8 @@ void PerimeterGenerator::process_arachne(
     ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions);
     // Two-pass bridge: duplicate bridge perimeter paths for Arachne mode.
     // Same logic as classic mode (lines 1596-1672), extended to handle ExtrusionMultiPath (open extrusions).
-    if (two_pass_has_perims(params.object_config.two_pass_bridge_scope.value)) {
+    if (two_pass_has_perims(params.object_config.two_pass_bridge_scope.value) &&
+        two_pass_height_allowed(params.print_config, params.config.perimeter_extruder.value, params.layer_height)) {
         const coord_t anchor_len = scale_(params.config.bridge_anchor_length.value);
         std::vector<ExtrusionPath> pre_pass_paths;
         for (ExtrusionEntity *entity : extrusion_coll.entities) {
@@ -1703,7 +1704,8 @@ void PerimeterGenerator::process_classic(
         // Two-pass bridge: duplicate bridge perimeter paths as standalone pass_index=0 pre-pass.
         // The pass_index=0 copies are added as separate ExtrusionPath entities so the GCode
         // pre-pass loop can print them before the main perimeter order. Only for classic mode.
-        if (two_pass_has_perims(params.object_config.two_pass_bridge_scope.value)) {
+        if (two_pass_has_perims(params.object_config.two_pass_bridge_scope.value) &&
+            two_pass_height_allowed(params.print_config, params.config.perimeter_extruder.value, params.layer_height)) {
             const coord_t anchor_len = scale_(params.config.bridge_anchor_length.value);
             std::vector<ExtrusionPath> pre_pass_paths;
             for (ExtrusionEntity *entity : entities.entities) {
