@@ -1473,11 +1473,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("thin_walls", category_path + "detect-thin-walls");
         optgroup->append_single_option_line("thick_bridges", category_path + "thick_bridges");
         optgroup->append_single_option_line("two_pass_bridge_scope");
-        optgroup->append_single_option_line("external_perimeter_every_layers");
         optgroup->append_single_option_line("first_internal_perimeter_every_layers");
         optgroup->append_single_option_line("second_internal_perimeter_every_layers");
-        optgroup->append_single_option_line("automatic_perimeter_combination");
-        optgroup->append_single_option_line("combine_perimeters_overlap_percent");
+        optgroup->append_single_option_line("automatic_internal_perimeters_combination");
+        optgroup->append_single_option_line("automatic_internal_perimeters_combination_max_layer_height");
+        optgroup->append_single_option_line("combine_perimeters_max_shift");
+        optgroup->append_single_option_line("combine_perimeters_method");
+        optgroup->append_single_option_line("combine_perimeters_min_arc");
         optgroup->append_single_option_line("overhangs", category_path + "detect-bridging-perimeters");
 
         optgroup = page->new_optgroup(L("Advanced"));

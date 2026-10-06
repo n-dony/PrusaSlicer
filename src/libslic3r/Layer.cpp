@@ -667,9 +667,13 @@ inline bool has_compatible_layer_regions(const PrintRegionConfig &config, const 
            config.reverse_internal_perimeters                           == other_config.reverse_internal_perimeters &&
            config.reverse_internal_perimeters_at                        == other_config.reverse_internal_perimeters_at &&
            config.infill_overlap                                        == other_config.infill_overlap &&
-           config.external_perimeter_every_layers                       == other_config.external_perimeter_every_layers &&
            config.first_internal_perimeter_every_layers                 == other_config.first_internal_perimeter_every_layers &&
            config.second_internal_perimeter_every_layers                == other_config.second_internal_perimeter_every_layers &&
+           config.combine_perimeters_max_shift                          == other_config.combine_perimeters_max_shift &&
+           config.combine_perimeters_method                             == other_config.combine_perimeters_method &&
+           config.combine_perimeters_min_arc                            == other_config.combine_perimeters_min_arc &&
+           config.automatic_internal_perimeters_combination             == other_config.automatic_internal_perimeters_combination &&
+           config.automatic_internal_perimeters_combination_max_layer_height == other_config.automatic_internal_perimeters_combination_max_layer_height &&
            has_compatible_dynamic_overhang_speed(config, other_config);
 }
 
