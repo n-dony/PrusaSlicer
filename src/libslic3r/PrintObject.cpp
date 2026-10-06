@@ -3146,8 +3146,12 @@ void PrintObject::combine_infill()
 {
     // Reset flags from any previous run.
     for (auto *layer : m_layers)
-        for (auto *region : layer->m_regions)
+        for (auto *region : layer->m_regions) {
             region->m_infill_moved_to_upper_layer = false;
+            // Role bit 2 (infill) of the role-resolved combine masks; the perimeter bits are owned by combine_perimeters().
+            region->m_combine_sub_mask &= uint8_t(~LayerRegion::CombineRoleInfill);
+            region->m_combine_top_mask &= uint8_t(~LayerRegion::CombineRoleInfill);
+        }
 
     // Work on each region separately.
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
@@ -3259,8 +3263,11 @@ void PrintObject::combine_infill()
                         intersection_ex(internal, intersection_with_clearance),
                         stInternalVoid);
                     layerm->m_infill_moved_to_upper_layer = true;
+                    layerm->m_combine_sub_mask |= LayerRegion::CombineRoleInfill;
                 }
             }
+            // The group top receives the merged infill (the intersection is non-empty here, so at least one sub-layer was marked).
+            layerms.back()->m_combine_top_mask |= LayerRegion::CombineRoleInfill;
 
             // Solid infill bands between the innermost perimeter and the sparse infill
             // (stInternalSolid: solid_infill_below_area narrow regions, vertical-shell
@@ -3308,8 +3315,10 @@ void PrintObject::combine_infill()
                                 intersection_ex(solid, solid_clearance),
                                 stInternalVoid);
                             layerm->m_infill_moved_to_upper_layer = true;
+                            layerm->m_combine_sub_mask |= LayerRegion::CombineRoleInfill;
                         }
                     }
+                    layerms.back()->m_combine_top_mask |= LayerRegion::CombineRoleInfill;
                 }
             }
         }
@@ -4271,6 +4280,9 @@ void PrintObject::combine_perimeters()
         for (LayerRegion *layerm : layer->m_regions) {
             layerm->m_perimeters_moved_to_upper_layer = false;
             layerm->m_perimeter_entity_count_pre_combine = -1;
+            // Perimeter role bits of the role-resolved combine masks (the infill bit is owned by combine_infill()).
+            layerm->m_combine_sub_mask &= uint8_t(~(LayerRegion::CombineRoleFirstInternal | LayerRegion::CombineRoleSecondInternal));
+            layerm->m_combine_top_mask &= uint8_t(~(LayerRegion::CombineRoleFirstInternal | LayerRegion::CombineRoleSecondInternal));
         }
 
     struct RoleSpec {
@@ -4310,6 +4322,17 @@ void PrintObject::combine_perimeters()
             auto role_matches = [&](ExtrusionRole r) -> bool {
                 if (spec.role == ExtrusionRole::FirstInternalPerimeter)  return r.is_first_internal_perimeter() && !r.is_bridge();
                 return r.is_second_internal_perimeter() && !r.is_bridge();
+            };
+
+            // Role-resolved combine masks (LayerRegion::m_combine_sub_mask / m_combine_top_mask).
+            const uint8_t role_bit = (spec.role == ExtrusionRole::FirstInternalPerimeter) ?
+                LayerRegion::CombineRoleFirstInternal : LayerRegion::CombineRoleSecondInternal;
+            auto mark_combine_sub = [&](LayerRegion *rm) {
+                rm->m_perimeters_moved_to_upper_layer = true;
+                rm->m_combine_sub_mask |= role_bit;
+            };
+            auto mark_combine_top = [&](size_t top_idx) {
+                m_layers[top_idx]->m_regions[region_id]->m_combine_top_mask |= role_bit;
             };
 
             // Per-spec role loop index cache (not used for decisions yet).
@@ -4625,8 +4648,9 @@ void PrintObject::combine_perimeters()
                             return;
                         path.polyline = Polyline{};
                     });
-                    sub_rm->m_perimeters_moved_to_upper_layer = true;
+                    mark_combine_sub(sub_rm);
                 }
+                mark_combine_top(top_idx);
 
                 // Remove empty paths from loops/multipaths, then remove now-empty
                 // containers and bare empty paths from each island's entity list.
@@ -5048,7 +5072,7 @@ void PrintObject::combine_perimeters()
                 for (size_t k = 0; k < n_sub; ++ k) {
                     LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
                     stash_pre_combine_count(sub_rm);
-                    sub_rm->m_perimeters_moved_to_upper_layer = true;
+                    mark_combine_sub(sub_rm);
                     const auto &sents = subs[k]->entities();
                     for (size_t s = 0; s < sents.size(); ++ s) {
                         const std::vector<ArcRun> &vr = vruns[k][s];
@@ -5112,6 +5136,7 @@ void PrintObject::combine_perimeters()
                         delete se.entity;
                     }
                 }
+                mark_combine_top(top_idx);
                 purge_empty_perimeters(group_start, top_idx);
             };
 
@@ -5255,8 +5280,9 @@ void PrintObject::combine_perimeters()
                                 if (role_matches(path.role()))
                                     path.polyline = Polyline{};
                             });
-                    sub_rm->m_perimeters_moved_to_upper_layer = true; // >= 1 loop voided (combinable is non-empty)
+                    mark_combine_sub(sub_rm); // >= 1 loop voided (combinable is non-empty)
                 }
+                mark_combine_top(top_idx);
 
                 purge_empty_perimeters(group_start, top_idx);
             };
@@ -5531,8 +5557,9 @@ void PrintObject::combine_perimeters()
                             if (role_matches(path.role()))
                                 path.polyline = Polyline{};
                         });
-                    sub_rm->m_perimeters_moved_to_upper_layer = true;
+                    mark_combine_sub(sub_rm);
                 }
+                mark_combine_top(top_idx);
                 purge_empty_perimeters(group_start, top_idx);
                 // Drop everything cached about the mutated layers.
                 for (size_t i = group_start; i <= top_idx; ++ i)

@@ -97,6 +97,16 @@ struct LayerResult {
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, false, true}; }
 };
 
+// CoolingBuffer flush decision for the layers sharing one print_z (object_layers: the object layers among them).
+// is_sub_layer: the layer is buffered as a combine sub-layer (CoolingBuffer evaluates it together with the group top).
+// flush:        the CoolingBuffer is flushed after this layer (it is a group top of some role, an uncombined layer,
+//               a raft layer or the last layer).
+struct CombineFlushDecision {
+    bool is_sub_layer { false };
+    bool flush        { false };
+};
+CombineFlushDecision combine_flush_decision(const std::vector<const Layer*> &object_layers, bool has_object_layer, bool raft_layer, bool last_layer);
+
 namespace GCode {
 struct PrintObjectInstance
 {

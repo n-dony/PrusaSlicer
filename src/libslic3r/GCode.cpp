@@ -2975,30 +2975,46 @@ LayerResult GCodeGenerator::process_layer(
 
     result.gcode = std::move(gcode);
 
-    // combine_perimeters() voids internal perimeter paths on the lower (thin) layers of each
-    // N-layer group and merges them at combined height onto the group-top layer, which prints last.
-    // Those thin layers are marked via LayerRegion::m_perimeters_moved_to_upper_layer.
-    // Defer the CoolingBuffer flush when EVERY object layer at this print_z is a thin sub-layer,
-    // so the whole group is evaluated together as one unit against slowdown_below_layer_time.
-    // Conservative multi-object rule: flush if ANY object has non-thinned regions — a wrong
-    // deferral under-cools; a wrong flush only over-slows.
+    // combine_perimeters() / combine_infill() void the internal perimeter / infill paths on the lower
+    // (thin) layers of each N-layer group and merge them at combined height onto the group-top layer,
+    // which prints last. Per role, LayerRegion::combine_sub_mask() / combine_top_mask() record which layer
+    // is a sub-layer and which one is the group top. The CoolingBuffer flush is deferred only for a layer
+    // that is a sub-layer and at the same time not the top of any role's group: see combine_flush_decision().
     // Support-only layers (no object layer) retain original behavior: defer unless raft or last.
-    bool combine_sub_layer = (object_layer != nullptr);
+    std::vector<const Layer*> object_layers;
     for (const ObjectLayerToPrint &l : layers)
-        if (l.object_layer &&
-            std::none_of(l.object_layer->regions().begin(), l.object_layer->regions().end(),
-                         [](const LayerRegion *r) {
-                             return r->perimeters_moved_to_upper_layer() || r->infill_moved_to_upper_layer();
-                         })) {
+        if (l.object_layer)
+            object_layers.push_back(l.object_layer);
+    const CombineFlushDecision decision = combine_flush_decision(object_layers, object_layer != nullptr, raft_layer, last_layer);
+    result.cooling_buffer_flush = decision.flush;
+    result.cooling_buffer_combine_sub_layer = decision.is_sub_layer;
+
+    return result;
+}
+
+CombineFlushDecision combine_flush_decision(const std::vector<const Layer*> &object_layers, bool has_object_layer, bool raft_layer, bool last_layer)
+{
+    // A layer is a buffered sub-layer iff, for EVERY object layer at this print_z, it has at least one region
+    // whose material of some role was moved to a higher layer (sub mask / legacy boolean flags) AND no region
+    // receives combined material from lower layers (top mask), i.e. it is not the group top of any role.
+    // Conservative multi-object rule: flush if ANY object layer is not such a pure sub-layer -- a wrong
+    // deferral under-cools, a wrong flush only over-slows.
+    bool combine_sub_layer = has_object_layer;
+    for (const Layer *l : object_layers) {
+        const auto &regions = l->regions();
+        const bool any_sub = std::any_of(regions.begin(), regions.end(), [](const LayerRegion *r) {
+            return r->is_combine_sub() || r->perimeters_moved_to_upper_layer() || r->infill_moved_to_upper_layer();
+        });
+        const bool any_top = std::any_of(regions.begin(), regions.end(), [](const LayerRegion *r) { return r->is_combine_top(); });
+        if (! any_sub || any_top) {
             combine_sub_layer = false;
             break;
         }
-
-    const bool do_flush = (object_layer && !combine_sub_layer) || raft_layer || last_layer;
-    result.cooling_buffer_flush = do_flush;
-    result.cooling_buffer_combine_sub_layer = combine_sub_layer && !do_flush;
-
-    return result;
+    }
+    CombineFlushDecision out;
+    out.flush         = (has_object_layer && ! combine_sub_layer) || raft_layer || last_layer;
+    out.is_sub_layer  = combine_sub_layer && ! out.flush;
+    return out;
 }
 
 static const auto comment_perimeter = "perimeter"sv;

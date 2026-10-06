@@ -157,6 +157,18 @@ public:
     // printed merged at combined height on the group-top layer above this one.
     bool    infill_moved_to_upper_layer() const { return m_infill_moved_to_upper_layer; }
 
+    // Role-resolved record of the combine groups (CoolingBuffer flush decision).
+    // Role bits: first-internal perimeter, second-internal perimeter, infill (sparse / internal solid).
+    static constexpr uint8_t CombineRoleFirstInternal  = 1;
+    static constexpr uint8_t CombineRoleSecondInternal = 2;
+    static constexpr uint8_t CombineRoleInfill         = 4;
+    // Bit R set: this layer's material of role R was moved to a higher layer (it is a sub-layer for role R).
+    uint8_t combine_sub_mask() const { return m_combine_sub_mask; }
+    // Bit R set: this layer receives role R's combined material from the layers below (it is a group top for role R).
+    uint8_t combine_top_mask() const { return m_combine_top_mask; }
+    bool    is_combine_sub() const { return m_combine_sub_mask != 0; }
+    bool    is_combine_top() const { return m_combine_top_mask != 0; }
+
 protected:
     friend class Layer;
     friend class PrintObject;
@@ -231,6 +243,12 @@ private:
     // Set by PrintObject::combine_infill() on the lower (thin) layers of each infill combine group.
     // Reset to false at the top of combine_infill() before each run.
     bool    m_infill_moved_to_upper_layer { false };
+
+    // Role-resolved combine masks, see combine_sub_mask() / combine_top_mask(). Set and reset by
+    // PrintObject::combine_perimeters() (perimeter bits) and PrintObject::combine_infill() (infill bit)
+    // at exactly the places where the two booleans above are set / reset.
+    uint8_t m_combine_sub_mask { 0 };
+    uint8_t m_combine_top_mask { 0 };
 
     // collection of expolygons representing the bridged areas (thus not
     // needing support material)
