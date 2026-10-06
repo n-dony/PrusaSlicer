@@ -1480,6 +1480,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("combine_perimeters_max_shift");
         optgroup->append_single_option_line("combine_perimeters_method");
         optgroup->append_single_option_line("combine_perimeters_min_arc");
+        optgroup->append_single_option_line("combine_perimeters_atomic_fragments");
         optgroup->append_single_option_line("overhangs", category_path + "detect-bridging-perimeters");
 
         optgroup = page->new_optgroup(L("Advanced"));

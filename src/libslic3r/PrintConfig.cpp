@@ -2323,6 +2323,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionEnum<CombinePerimetersMethod>(cpmLoopTolerant));
 
+    def = this->add("combine_perimeters_atomic_fragments", coBool);
+    def->label = L("Combine wall fragments together");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("When enabled, the open fragments into which Arachne splits one wall line (same island and same perimeter depth) "
+                     "are combined all together or not at all, so a wall line is never partly combined. Closed loops are always whole. "
+                     "Reduces how much is combined where one fragment of a wall does not match. "
+                     "Applies to the whole-loop methods (strict, tolerant, legacy mask v3); the legacy mask methods are already "
+                     "region-wide and arc coverage deliberately splits loops.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("combine_perimeters_min_arc", coFloat);
     def->label = L("Combine perimeters minimum arc");
     def->category = L("Layers and Perimeters");

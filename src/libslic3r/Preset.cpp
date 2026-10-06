@@ -483,6 +483,7 @@ static std::vector<std::string> s_Preset_print_options {
     "automatic_internal_perimeters_combination",
     "automatic_internal_perimeters_combination_max_layer_height",
     "combine_perimeters_max_shift",
+    "combine_perimeters_atomic_fragments",
     "combine_perimeters_method",
     "combine_perimeters_min_arc",
     "solid_infill_below_area", "only_retract_when_crossing_perimeters", "infill_first",

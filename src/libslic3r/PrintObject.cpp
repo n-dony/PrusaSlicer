@@ -746,6 +746,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "automatic_internal_perimeters_combination"
             || opt_key == "automatic_internal_perimeters_combination_max_layer_height"
             || opt_key == "combine_perimeters_max_shift"
+            || opt_key == "combine_perimeters_atomic_fragments"
             || opt_key == "combine_perimeters_method"
             || opt_key == "combine_perimeters_min_arc"
             || opt_key == "high_def_print") {
@@ -3542,6 +3543,7 @@ static Points role_loop_points(const RoleLoop &loop)
 // legacy_mask_v3: one eligible (non-mixed) loop of a role on one layer, with the data of the per-loop masks.
 struct V3Loop {
     ExtrusionEntity *entity          { nullptr };
+    size_t           island_idx      { 0 };       // position in LayerRegion::m_perimeters.entities
     int              perimeter_index { -1 };
     bool             is_open         { false };
     bool             clockwise       { false };
@@ -3564,7 +3566,51 @@ struct CombineStats {
     double arc_len = 0., arc_void_len = 0.; // scaled
     size_t arc_short_partial_voids = 0, arc_short_whole_voids = 0; // diagnostics (partial voids shorter than min_arc must stay 0)
     double arc_shortest_partial_void = DBL_MAX; // scaled
+    // combine_perimeters_atomic_fragments
+    size_t atomic_groups = 0, atomic_groups_dropped = 0, atomic_fragments_dropped = 0;
 };
+
+// combine_perimeters_atomic_fragments: the open fragments (ExtrusionMultiPath) of one wall line (same island and
+// same perimeter depth) are combined all together or not at all. `combinable` (ascending top loop indices) is
+// filtered in place. info(t) -> { island_idx, perimeter_index, is_open, mixed } of top loop t.
+// Closed loops, mixed loops (bridges / other roles) and singleton groups are untouched.
+template<typename InfoFn>
+static void apply_atomic_fragment_filter(std::vector<size_t> &combinable, size_t n_loops, InfoFn &&info, CombineStats &stats)
+{
+    struct Group { size_t members = 0, combinable = 0; };
+    std::map<std::pair<size_t, int>, Group> groups;
+    for (size_t t = 0; t < n_loops; ++ t) {
+        const auto [island, depth, is_open, mixed] = info(t);
+        if (is_open && ! mixed)
+            ++ groups[{ island, depth }].members;
+    }
+    for (size_t t : combinable) {
+        const auto [island, depth, is_open, mixed] = info(t);
+        if (is_open && ! mixed)
+            ++ groups[{ island, depth }].combinable;
+    }
+    bool any_drop = false;
+    for (const auto &kv : groups) {
+        const Group &g = kv.second;
+        if (g.members < 2)
+            continue;
+        ++ stats.atomic_groups;
+        if (g.combinable > 0 && g.combinable < g.members) {
+            ++ stats.atomic_groups_dropped;
+            stats.atomic_fragments_dropped += g.combinable;
+            any_drop = true;
+        }
+    }
+    if (! any_drop)
+        return;
+    combinable.erase(std::remove_if(combinable.begin(), combinable.end(), [&](size_t t) {
+        const auto [island, depth, is_open, mixed] = info(t);
+        if (! is_open || mixed)
+            return false;
+        const Group &g = groups[{ island, depth }];
+        return g.members >= 2 && g.combinable < g.members;
+    }), combinable.end());
+}
 
 struct RoleLoopProbe {
     int    target      { -1 };  // loop of the other index that received >= 98% of the usable samples
@@ -5140,6 +5186,14 @@ void PrintObject::combine_perimeters()
                     if (all)
                         combinable.push_back(t);
                 }
+                if (cfg.combine_perimeters_atomic_fragments &&
+                    (cfg.combine_perimeters_method == cpmLoopStrict || cfg.combine_perimeters_method == cpmLoopTolerant)) {
+                    // Filter after matching (the pair caches hold the unfiltered matches).
+                    apply_atomic_fragment_filter(combinable, top_index.loop_count(), [&](size_t t) {
+                        const RoleLoop &l = top_index.loop(t);
+                        return std::make_tuple(l.island_idx, l.perimeter_index, l.is_open, l.mixed);
+                    }, stats);
+                }
                 if (combinable.empty()) return WindowPlan();
 
                 WindowPlan plan;
@@ -5230,8 +5284,8 @@ void PrintObject::combine_perimeters()
             auto v3_build_layer = [&](LayerRegion *rm) -> V3Layer {
                 V3Layer out;
                 out.built = true;
-                for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
-                    auto *island = dynamic_cast<ExtrusionEntityCollection*>(ee);
+                for (size_t island_idx = 0; island_idx < rm->m_perimeters.entities.size(); ++ island_idx) {
+                    auto *island = dynamic_cast<ExtrusionEntityCollection*>(rm->m_perimeters.entities[island_idx]);
                     if (island == nullptr)
                         continue;
                     for (ExtrusionEntity *child : island->entities) {
@@ -5252,6 +5306,7 @@ void PrintObject::combine_perimeters()
                             continue; // not of this role, or mixed (bridge): skipped individually
                         V3Loop l;
                         l.entity    = child;
+                        l.island_idx = island_idx;
                         l.is_open   = is_open;
                         l.clockwise = clockwise;
                         std::vector<double> widths;
@@ -5447,6 +5502,11 @@ void PrintObject::combine_perimeters()
                     if (all)
                         combinable.push_back(t);
                 }
+                if (cfg.combine_perimeters_atomic_fragments)
+                    apply_atomic_fragment_filter(combinable, T.loops.size(), [&](size_t t) {
+                        const V3Loop &l = T.loops[t];
+                        return std::make_tuple(l.island_idx, l.perimeter_index, l.is_open, false); // mixed loops are not in V3Layer
+                    }, stats);
                 if (combinable.empty())
                     return false;
                 // Per-path flow on the combinable top loops (as legacy_mask_v2 / the loop methods).
@@ -5700,7 +5760,10 @@ void PrintObject::combine_perimeters()
                 BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
                     << " sub_loops=" << stats.sub_loops << " matched_loops=" << stats.matched_loops
                     << " windows_tried=" << stats.windows << " windows_combined=" << stats.windows_combined
-                    << " loops_combined=" << stats.loops_combined;
+                    << " loops_combined=" << stats.loops_combined
+                    << " atomic_fragments=" << (cfg.combine_perimeters_atomic_fragments ? 1 : 0)
+                    << " fragment_groups_seen=" << stats.atomic_groups << " groups_made_non_combinable=" << stats.atomic_groups_dropped
+                    << " fragments_dropped=" << stats.atomic_fragments_dropped;
             if (cfg.combine_perimeters_method == cpmArcCoverage)
                 BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: arc role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
                     << " runs_accepted=" << stats.arc_runs << " boundaries=" << stats.arc_boundaries
@@ -5713,7 +5776,10 @@ void PrintObject::combine_perimeters()
                 BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: v3 role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
                     << " layer_pairs=" << v3_n_layer_pairs << " pair_tests=" << v3_n_pair_tests << " bbox_pass=" << v3_n_bbox_pass
                     << " matches=" << v3_n_matches << " pair_masks=" << v3_n_demand_masks
-                    << " match_ms=" << v3_match_ms << " phase2_ms=" << v3_ph2_ms << " phase3_ms=" << v3_ph3_ms;
+                    << " match_ms=" << v3_match_ms << " phase2_ms=" << v3_ph2_ms << " phase3_ms=" << v3_ph3_ms
+                    << " atomic_fragments=" << (cfg.combine_perimeters_atomic_fragments ? 1 : 0)
+                    << " fragment_groups_seen=" << stats.atomic_groups << " groups_made_non_combinable=" << stats.atomic_groups_dropped
+                    << " fragments_dropped=" << stats.atomic_fragments_dropped;
             BOOST_LOG_TRIVIAL(trace) << "combine_perimeters: built " << role_index_cache.builds() << " role loop indexes";
         }
     }
