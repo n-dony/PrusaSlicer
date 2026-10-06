@@ -15,6 +15,8 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
+#include <tuple>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -739,11 +741,13 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "arc_fitting"
             || opt_key == "top_one_perimeter_type"
             || opt_key == "only_one_perimeter_first_layer"
-            || opt_key == "external_perimeter_every_layers"
             || opt_key == "first_internal_perimeter_every_layers"
             || opt_key == "second_internal_perimeter_every_layers"
-            || opt_key == "automatic_perimeter_combination"
-            || opt_key == "combine_perimeters_overlap_percent"
+            || opt_key == "automatic_internal_perimeters_combination"
+            || opt_key == "automatic_internal_perimeters_combination_max_layer_height"
+            || opt_key == "combine_perimeters_max_shift"
+            || opt_key == "combine_perimeters_method"
+            || opt_key == "combine_perimeters_min_arc"
             || opt_key == "high_def_print") {
             steps.emplace_back(posPerimeters);
         } else if (
@@ -3311,6 +3315,892 @@ void PrintObject::combine_infill()
     }
 } // void PrintObject::combine_infill()
 
+namespace {
+
+// One loop (closed ExtrusionLoop or open ExtrusionMultiPath) of a role on one layer.
+struct RoleLoop {
+    const ExtrusionEntity *entity           { nullptr };
+    size_t                 island_idx       { 0 };      // position in LayerRegion::m_perimeters.entities
+    int                    perimeter_index  { -1 };     // from the first path, -1 if absent
+    bool                   is_open          { false };
+    bool                   clockwise        { false };  // closed loops only
+    bool                   mixed            { false };  // has matching and non-matching paths (incl. bridges)
+    BoundingBox            bbox;
+    double                 min_spacing_path { 0. };     // scaled; min of width - height * (1 - pi/4)
+    double                 length           { 0. };     // scaled
+};
+
+// Per-island loop counts, so that two layers can be compared for equal topology.
+struct RoleIslandTopology {
+    std::map<std::pair<int, int>, int> loops_per_depth; // (island_idx, perimeter_index) -> loop count
+    std::map<int, int>                 holes_per_island; // island_idx -> clockwise closed loop count
+    bool operator==(const RoleIslandTopology &o) const
+        { return loops_per_depth == o.loops_per_depth && holes_per_island == o.holes_per_island; }
+    bool operator!=(const RoleIslandTopology &o) const { return ! (*this == o); }
+};
+
+// Read-only (after construction) index of the loops of one role on one layer region.
+class RoleLoopIndex
+{
+public:
+    using Distancer = AABBTreeLines::LinesDistancer<Line>;
+
+    template<typename RoleFn>
+    RoleLoopIndex(const LayerRegion &layerm, RoleFn &&role_matches)
+    {
+        std::vector<Line> lines;
+        std::map<int, std::vector<Line>>    depth_lines;
+        std::map<int, std::vector<uint32_t>> depth_owner;
+        const auto &islands = layerm.perimeters().entities;
+        for (size_t island_idx = 0; island_idx < islands.size(); ++ island_idx) {
+            const auto *island = dynamic_cast<const ExtrusionEntityCollection*>(islands[island_idx]);
+            if (island == nullptr)
+                continue;
+            for (const ExtrusionEntity *child : island->entities) {
+                const std::vector<ExtrusionPath> *paths = nullptr;
+                bool is_open = false, clockwise = false;
+                if (auto *loop = dynamic_cast<const ExtrusionLoop*>(child)) {
+                    paths = &loop->paths;
+                    clockwise = loop->is_clockwise();
+                } else if (auto *mpath = dynamic_cast<const ExtrusionMultiPath*>(child)) {
+                    paths = &mpath->paths;
+                    is_open = true;
+                } else
+                    continue; // bare ExtrusionPath: overhang extras, two-pass copies
+                size_t n_match = 0, n_other = 0;
+                for (const ExtrusionPath &p : *paths)
+                    (role_matches(p.role()) ? n_match : n_other) ++;
+                if (n_match == 0)
+                    continue;
+                RoleLoop rl;
+                rl.entity     = child;
+                rl.island_idx = island_idx;
+                rl.is_open    = is_open;
+                rl.clockwise  = clockwise;
+                rl.mixed      = n_other > 0;
+                rl.min_spacing_path = DBL_MAX;
+                Points pts;
+                for (const ExtrusionPath &p : *paths) {
+                    if (p.polyline.points.empty())
+                        continue;
+                    if (rl.perimeter_index < 0 && p.attributes().perimeter_index.has_value())
+                        rl.perimeter_index = int(*p.attributes().perimeter_index);
+                    if (role_matches(p.role()))
+                        rl.min_spacing_path = std::min(rl.min_spacing_path,
+                            scale_(double(p.width()) - double(p.height()) * (1. - 0.25 * M_PI)));
+                    for (const Point &pt : p.polyline.points)
+                        if (pts.empty() || pts.back() != pt)
+                            pts.emplace_back(pt);
+                }
+                if (pts.size() < 2)
+                    continue;
+                if (rl.min_spacing_path == DBL_MAX)
+                    rl.min_spacing_path = 0.;
+                if (! is_open && pts.back() == pts.front())
+                    pts.pop_back();
+                if (pts.size() < 2)
+                    continue;
+                rl.bbox = BoundingBox(pts);
+                const uint32_t loop_idx = uint32_t(m_loops.size());
+                for (size_t i = 0; i + 1 < pts.size(); ++ i) {
+                    lines.emplace_back(pts[i], pts[i + 1]);
+                    m_line_owner.emplace_back(loop_idx);
+                    depth_lines[rl.perimeter_index].emplace_back(lines.back());
+                    depth_owner[rl.perimeter_index].emplace_back(loop_idx);
+                    rl.length += lines.back().length();
+                }
+                if (! is_open && pts.size() > 2) {
+                    lines.emplace_back(pts.back(), pts.front());
+                    m_line_owner.emplace_back(loop_idx);
+                    depth_lines[rl.perimeter_index].emplace_back(lines.back());
+                    depth_owner[rl.perimeter_index].emplace_back(loop_idx);
+                    rl.length += lines.back().length();
+                }
+                m_loops.emplace_back(std::move(rl));
+            }
+        }
+        if (! lines.empty())
+            m_distancer = Distancer(std::move(lines));
+        for (auto &kv : depth_lines) {
+            DepthIndex &di = m_by_depth[kv.first];
+            di.owner       = std::move(depth_owner[kv.first]);
+            di.distancer   = Distancer(std::move(kv.second));
+        }
+    }
+
+    bool           empty()      const { return m_loops.empty(); }
+    size_t         loop_count() const { return m_loops.size(); }
+    const RoleLoop& loop(size_t i) const { return m_loops[i]; }
+
+    // Nearest role-loop segment to pt. line_dir is the unit direction of that segment.
+    bool nearest(const Point &pt, double &dist, size_t &loop_idx, Vec2d &line_dir, Vec2d &nearest_pt) const
+    {
+        if (m_loops.empty())
+            return false;
+        auto [d, line_id, np] = m_distancer.distance_from_lines_extra<false>(pt);
+        if (line_id >= m_line_owner.size())
+            return false;
+        const Line &l = m_distancer.get_line(line_id);
+        const Vec2d dir = (l.b - l.a).cast<double>();
+        const double len = dir.norm();
+        dist       = d;
+        loop_idx   = m_line_owner[line_id];
+        line_dir   = len > 0. ? Vec2d(dir / len) : Vec2d(1., 0.);
+        nearest_pt = np;
+        return true;
+    }
+
+    // Same, restricted to the loops of one perimeter_index (-1 = absent). False if there are none.
+    bool nearest(const Point &pt, int perimeter_index, double &dist, size_t &loop_idx, Vec2d &line_dir, Vec2d &nearest_pt) const
+    {
+        auto it = m_by_depth.find(perimeter_index);
+        if (it == m_by_depth.end())
+            return false;
+        const DepthIndex &di = it->second;
+        auto [d, line_id, np] = di.distancer.distance_from_lines_extra<false>(pt);
+        if (line_id >= di.owner.size())
+            return false;
+        const Line &l = di.distancer.get_line(line_id);
+        const Vec2d dir = (l.b - l.a).cast<double>();
+        const double len = dir.norm();
+        dist       = d;
+        loop_idx   = di.owner[line_id];
+        line_dir   = len > 0. ? Vec2d(dir / len) : Vec2d(1., 0.);
+        nearest_pt = np;
+        return true;
+    }
+
+    RoleIslandTopology topology() const
+    {
+        RoleIslandTopology t;
+        for (const RoleLoop &l : m_loops) {
+            ++ t.loops_per_depth[{ int(l.island_idx), l.perimeter_index }];
+            if (! l.is_open && l.clockwise)
+                ++ t.holes_per_island[int(l.island_idx)];
+        }
+        return t;
+    }
+
+private:
+    std::vector<RoleLoop>  m_loops;
+    std::vector<uint32_t>  m_line_owner;
+    Distancer              m_distancer;
+    struct DepthIndex {
+        Distancer             distancer;
+        std::vector<uint32_t> owner;
+    };
+    std::map<int, DepthIndex> m_by_depth;
+};
+
+// Lazily filled per-layer cache of RoleLoopIndex; valid only inside one role spec
+// (the apply phase mutates loops, windows never reuse an applied layer).
+class RoleIndexCache
+{
+public:
+    explicit RoleIndexCache(size_t n_layers) : m_cache(n_layers) {}
+
+    template<typename RoleFn>
+    const RoleLoopIndex& get(size_t layer_idx, const LayerRegion &layerm, RoleFn &&role_matches)
+    {
+        auto &slot = m_cache[layer_idx];
+        if (! slot) {
+            slot = std::make_unique<RoleLoopIndex>(layerm, role_matches);
+            ++ m_builds;
+            m_total_loops += slot->loop_count();
+        }
+        return *slot;
+    }
+    size_t builds() const { return m_builds; }
+    size_t total_loops() const { return m_total_loops; }
+
+private:
+    std::vector<std::unique_ptr<RoleLoopIndex>> m_cache;
+    size_t                                      m_builds { 0 };
+    size_t                                      m_total_loops { 0 };
+};
+
+// Ordered points of a role loop, derived exactly like RoleLoopIndex does.
+static Points role_loop_points(const RoleLoop &loop)
+{
+    const std::vector<ExtrusionPath> *paths = nullptr;
+    if (auto *l = dynamic_cast<const ExtrusionLoop*>(loop.entity))
+        paths = &l->paths;
+    else if (auto *m = dynamic_cast<const ExtrusionMultiPath*>(loop.entity))
+        paths = &m->paths;
+    Points pts;
+    if (paths == nullptr)
+        return pts;
+    for (const ExtrusionPath &p : *paths)
+        for (const Point &pt : p.polyline.points)
+            if (pts.empty() || pts.back() != pt)
+                pts.emplace_back(pt);
+    if (! loop.is_open && pts.size() > 1 && pts.back() == pts.front())
+        pts.pop_back();
+    return pts;
+}
+
+// legacy_mask_v3: one eligible (non-mixed) loop of a role on one layer, with the data of the per-loop masks.
+struct V3Loop {
+    ExtrusionEntity *entity          { nullptr };
+    int              perimeter_index { -1 };
+    bool             is_open         { false };
+    bool             clockwise       { false };
+    BoundingBox      bbox;
+    Polylines        polylines;                   // role-matching path polylines
+    double           width           { 0. };      // scaled nominal width: median path width
+    // Masks (union of the offsets of `polylines` by a radius), one per radius requested so far.
+    std::vector<std::pair<float, Polygons>> masks;
+};
+struct V3Layer {
+    bool                built { false };
+    std::vector<V3Loop> loops;
+};
+
+// Counters for the one-line debug summary of the per-loop matching (no influence on decisions).
+struct CombineStats {
+    size_t sub_loops = 0, matched_loops = 0, windows = 0, windows_combined = 0, loops_combined = 0;
+    // arc_coverage
+    size_t arc_runs = 0, arc_boundaries = 0;
+    double arc_len = 0., arc_void_len = 0.; // scaled
+    size_t arc_short_partial_voids = 0, arc_short_whole_voids = 0; // diagnostics (partial voids shorter than min_arc must stay 0)
+    double arc_shortest_partial_void = DBL_MAX; // scaled
+};
+
+struct RoleLoopProbe {
+    int    target      { -1 };  // loop of the other index that received >= 98% of the usable samples
+    double max_lateral { 0. };  // worst normal-projected distance over the usable samples (scaled)
+    double p90_lateral { 0. };  // 90th percentile of the same distances (the max when fewer than 10 usable samples)
+};
+
+// Sample a loop at vertices, segment midpoints and every <= 1 mm, and cast every sample onto the
+// nearest segment of the other layer. Samples whose nearest segment is not within ~60 degrees of
+// parallel (corner spikes) are skipped: they count neither for nor against.
+static RoleLoopProbe probe_role_loop(const RoleLoop &loop, const RoleLoopIndex &other)
+{
+    RoleLoopProbe result;
+    const Points  pts = role_loop_points(loop);
+    if (pts.size() < 2)
+        return result;
+    std::map<size_t, size_t> counts;
+    size_t total = 0, usable = 0;
+    double max_lat = 0.;
+    std::vector<double> laterals;
+    auto sample = [&](const Point &p, const Vec2d &t) {
+        ++ total;
+        double d; size_t lid; Vec2d line_dir, np;
+        if (! other.nearest(p, loop.perimeter_index, d, lid, line_dir, np) || std::abs(t.dot(line_dir)) < 0.5)
+            return;
+        ++ usable;
+        ++ counts[lid];
+        const Vec2d n(- line_dir.y(), line_dir.x());
+        const double lat = std::abs((p.cast<double>() - np).dot(n));
+        max_lat = std::max(max_lat, lat);
+        laterals.emplace_back(lat);
+    };
+    const size_t n_pts = pts.size();
+    const size_t n_seg = (loop.is_open || n_pts < 3) ? n_pts - 1 : n_pts;
+    const double step  = scale_(1.);
+    for (size_t i = 0; i < n_seg; ++ i) {
+        const Point &a = pts[i];
+        const Point &b = pts[(i + 1) % n_pts];
+        const Vec2d  ab = (b - a).cast<double>();
+        const double len = ab.norm();
+        if (len <= 0.)
+            continue;
+        const Vec2d t = ab / len;
+        sample(a, t);
+        if (loop.is_open && i + 1 == n_seg)
+            sample(b, t);
+        size_t parts = std::max<size_t>(2, size_t(std::ceil(len / step)));
+        if (parts & 1)
+            ++ parts; // keeps the midpoint
+        for (size_t k = 1; k < parts; ++ k) {
+            const Vec2d q = a.cast<double>() + ab * (double(k) / double(parts));
+            sample(Point(coord_t(std::llround(q.x())), coord_t(std::llround(q.y()))), t);
+        }
+    }
+    if (total == 0 || usable < 2 || usable * 2 < total)
+        return result; // too few usable samples
+    size_t best = 0, best_count = 0;
+    for (const auto &kv : counts)
+        if (kv.second > best_count) {
+            best       = kv.first;
+            best_count = kv.second;
+        }
+    if (best_count * 100 < usable * 98)
+        return result; // no dominant target
+    result.target      = int(best);
+    result.max_lateral = max_lat;
+    if (laterals.size() < 10)
+        result.p90_lateral = max_lat;
+    else {
+        const size_t k = (laterals.size() * 9) / 10;
+        std::nth_element(laterals.begin(), laterals.begin() + k, laterals.end());
+        result.p90_lateral = laterals[k];
+    }
+    return result;
+}
+
+// Match the loops of a sub-layer to the loops of the top layer. Returns, for every top loop,
+// the matched sub loop index or -1.
+static std::vector<int> match_role_loops(const RoleLoopIndex &sub, const RoleLoopIndex &top,
+                                         double shift_scaled, double nominal_spacing, bool tolerant, CombineStats &stats)
+{
+    const size_t ns = sub.loop_count(), nt = top.loop_count();
+    std::vector<int> sub_to_top(ns, -1);
+    auto half_spacing = [&](const RoleLoop &a, const RoleLoop &b) {
+        const double sa = a.min_spacing_path > 0. ? a.min_spacing_path : nominal_spacing;
+        const double sb = b.min_spacing_path > 0. ? b.min_spacing_path : nominal_spacing;
+        return 0.5 * std::min(sa, sb);
+    };
+    // Lateral acceptance. Strict: worst usable sample <= e_max (capped at half a spacing).
+    // Tolerant: 90th percentile <= shift AND worst usable sample <= e_hard (half a spacing).
+    auto lateral_ok = [&](const RoleLoopProbe &pr, const RoleLoop &a, const RoleLoop &b) {
+        const double half = half_spacing(a, b);
+        if (! tolerant) // capped by the shift
+            return pr.max_lateral <= std::max(std::min(shift_scaled, half), 5.); // 5 nm: numeric floor
+        // e_hard is half a spacing, NOT capped by the shift
+        return pr.p90_lateral <= std::max(shift_scaled, 5.) && pr.max_lateral <= std::max(half, 5.);
+    };
+    // Proposal (sub -> top) and identity check (top -> sub).
+    for (size_t s = 0; s < ns; ++ s) {
+        const RoleLoop &S = sub.loop(s);
+        ++ stats.sub_loops;
+        if (S.mixed)
+            continue;
+        const RoleLoopProbe fwd = probe_role_loop(S, top);
+        if (fwd.target < 0)
+            continue;
+        const RoleLoop &T = top.loop(size_t(fwd.target));
+        if (T.mixed || T.perimeter_index != S.perimeter_index || T.is_open != S.is_open ||
+            (! S.is_open && T.clockwise != S.clockwise))
+            continue;
+        if (! lateral_ok(fwd, S, T))
+            continue;
+        const RoleLoopProbe rev = probe_role_loop(T, sub);
+        if (rev.target != int(s) || ! lateral_ok(rev, S, T))
+            continue;
+        sub_to_top[s] = fwd.target;
+    }
+    // One-to-one: a top loop proposed by several sub loops stays unmatched.
+    {
+        std::vector<int> proposers(nt, 0);
+        for (size_t s = 0; s < ns; ++ s)
+            if (sub_to_top[s] >= 0)
+                ++ proposers[size_t(sub_to_top[s])];
+        for (size_t s = 0; s < ns; ++ s)
+            if (sub_to_top[s] >= 0 && proposers[size_t(sub_to_top[s])] > 1)
+                sub_to_top[s] = -1;
+    }
+    // Island gate: matched pairs must map sub islands to top islands one-to-one.
+    {
+        std::map<size_t, std::set<size_t>> sub_to_top_isl, top_to_sub_isl;
+        for (size_t s = 0; s < ns; ++ s)
+            if (sub_to_top[s] >= 0) {
+                const size_t si = sub.loop(s).island_idx, ti = top.loop(size_t(sub_to_top[s])).island_idx;
+                sub_to_top_isl[si].insert(ti);
+                top_to_sub_isl[ti].insert(si);
+            }
+        for (size_t s = 0; s < ns; ++ s)
+            if (sub_to_top[s] >= 0) {
+                const size_t si = sub.loop(s).island_idx, ti = top.loop(size_t(sub_to_top[s])).island_idx;
+                if (sub_to_top_isl[si].size() > 1 || top_to_sub_isl[ti].size() > 1)
+                    sub_to_top[s] = -1;
+            }
+    }
+    // Topology gate: per (island pair, depth, kind) the loop counts of the two layers must be equal,
+    // counting all loops of that kind (matched or not).
+    {
+        using Kind = std::tuple<size_t, int, bool, bool>; // island, perimeter_index, open, clockwise
+        auto kind_of = [](const RoleLoop &l) { return Kind(l.island_idx, l.perimeter_index, l.is_open, ! l.is_open && l.clockwise); };
+        auto count_kinds = [&](const RoleLoopIndex &idx) {
+            std::map<Kind, int> c;
+            for (size_t i = 0; i < idx.loop_count(); ++ i)
+                ++ c[kind_of(idx.loop(i))];
+            return c;
+        };
+        const std::map<Kind, int> sub_counts = count_kinds(sub), top_counts = count_kinds(top);
+        std::map<std::pair<Kind, size_t>, std::vector<size_t>> groups; // (sub kind, top island) -> sub loops
+        for (size_t s = 0; s < ns; ++ s)
+            if (sub_to_top[s] >= 0)
+                groups[{ kind_of(sub.loop(s)), top.loop(size_t(sub_to_top[s])).island_idx }].push_back(s);
+        for (const auto &g : groups) {
+            Kind tk = g.first.first;
+            std::get<0>(tk) = g.first.second;
+            auto it = top_counts.find(tk);
+            if (it == top_counts.end() || it->second != sub_counts.at(g.first.first))
+                for (size_t s : g.second)
+                    sub_to_top[s] = -1;
+        }
+    }
+    for (int v : sub_to_top)
+        stats.matched_loops += v >= 0;
+    std::vector<int> top_to_sub(nt, -1);
+    for (size_t s = 0; s < ns; ++ s)
+        if (sub_to_top[s] >= 0)
+            top_to_sub[size_t(sub_to_top[s])] = int(s);
+    return top_to_sub;
+}
+
+// ======================= arc_coverage (partial loops) =======================
+// Entities (loops / multipaths whose paths ALL match the role) are chained into one ordered
+// point list. "along" is the arc length in scaled units from the first point of the chain.
+
+struct ArcPathSpan { double a0 { 0. }, a1 { 0. }, s_p { 0. }; }; // chain interval of one path; s_p in mm
+
+struct ArcSample {
+    Point  p;
+    Vec2d  t0;      // tangent of the segment starting here
+    Vec2d  t1;      // tangent of the segment ending here (equal to t0 away from vertices)
+    double along;
+};
+
+struct ArcEntity {
+    ExtrusionEntity         *entity          { nullptr };
+    size_t                   island_idx      { 0 };
+    int                      perimeter_index { -1 };
+    bool                     is_open         { false };
+    double                   spacing         { 0. };   // scaled, min over paths, 0 if unknown
+    double                   total           { 0. };   // scaled chain length (closed: incl. closing segment)
+    std::vector<ArcPathSpan> spans;
+    std::vector<ArcSample>   samples;
+};
+
+struct ArcCover {
+    bool     found  { false };
+    bool     usable { false };
+    double   lat    { 0. };
+    uint32_t ent    { 0 };
+    double   along  { 0. };
+};
+
+struct ArcHit {
+    double   dist;
+    uint32_t ent;
+    double   along;
+    Vec2d    dir;
+    Vec2d    np;
+};
+
+class ArcLayerIndex
+{
+public:
+    using Distancer = AABBTreeLines::LinesDistancer<Line>;
+
+    template<typename RoleFn>
+    ArcLayerIndex(const LayerRegion &layerm, RoleFn &&role_matches, double sample_step)
+    {
+        std::map<int, std::vector<Line>>                              depth_lines;
+        std::map<int, std::vector<std::pair<uint32_t, double>>>       depth_info;
+        const auto &islands = layerm.perimeters().entities;
+        for (size_t island_idx = 0; island_idx < islands.size(); ++ island_idx) {
+            const auto *island = dynamic_cast<const ExtrusionEntityCollection*>(islands[island_idx]);
+            if (island == nullptr)
+                continue;
+            for (const ExtrusionEntity *child : island->entities) {
+                const std::vector<ExtrusionPath> *paths = nullptr;
+                bool is_open = false;
+                if (auto *loop = dynamic_cast<const ExtrusionLoop*>(child))
+                    paths = &loop->paths;
+                else if (auto *mpath = dynamic_cast<const ExtrusionMultiPath*>(child)) {
+                    paths = &mpath->paths;
+                    is_open = true;
+                } else
+                    continue;
+                bool eligible = ! paths->empty();
+                for (const ExtrusionPath &p : *paths)
+                    if (! role_matches(p.role())) {
+                        eligible = false;
+                        break;
+                    }
+                if (! eligible)
+                    continue; // mixed or bridge: never touched
+                ArcEntity e;
+                e.entity     = const_cast<ExtrusionEntity*>(child);
+                e.island_idx = island_idx;
+                e.is_open    = is_open;
+                double min_sp = DBL_MAX;
+                Points pts;
+                double pos = 0.;
+                for (const ExtrusionPath &p : *paths) {
+                    if (p.polyline.points.empty())
+                        continue;
+                    if (e.perimeter_index < 0 && p.attributes().perimeter_index.has_value())
+                        e.perimeter_index = int(*p.attributes().perimeter_index);
+                    const double s_p = double(p.width()) - double(p.height()) * (1. - 0.25 * M_PI);
+                    min_sp = std::min(min_sp, scale_(s_p));
+                    ArcPathSpan span;
+                    span.s_p = s_p;
+                    bool first = true;
+                    for (const Point &q : p.polyline.points) {
+                        if (pts.empty())
+                            pts.emplace_back(q);
+                        else if (q != pts.back()) {
+                            pos += (q - pts.back()).cast<double>().norm();
+                            pts.emplace_back(q);
+                        }
+                        if (first) {
+                            span.a0 = pos;
+                            first   = false;
+                        }
+                    }
+                    span.a1 = pos;
+                    e.spans.emplace_back(span);
+                }
+                e.spacing = min_sp == DBL_MAX ? 0. : min_sp;
+                if (! is_open && pts.size() > 1 && pts.back() == pts.front())
+                    pts.pop_back();
+                if (pts.size() < 2 || (! is_open && pts.size() < 3))
+                    continue;
+                const size_t n = pts.size();
+                std::vector<double> ap(n, 0.);
+                for (size_t i = 1; i < n; ++ i)
+                    ap[i] = ap[i - 1] + (pts[i] - pts[i - 1]).cast<double>().norm();
+                e.total = ap.back() + (is_open ? 0. : (pts.front() - pts.back()).cast<double>().norm());
+                if (e.total <= 0.)
+                    continue;
+                const uint32_t ent_idx = uint32_t(m_entities.size());
+                const size_t   nseg    = is_open ? n - 1 : n;
+                auto tangent = [&](size_t j) {
+                    const Vec2d d = (pts[(j + 1) % n] - pts[j]).cast<double>();
+                    const double l = d.norm();
+                    return l > 0. ? Vec2d(d / l) : Vec2d(1., 0.);
+                };
+                for (size_t j = 0; j < nseg; ++ j) {
+                    const Point &a = pts[j];
+                    const Point &b = pts[(j + 1) % n];
+                    const Vec2d  ab = (b - a).cast<double>();
+                    const double len = ab.norm();
+                    if (len <= 0.)
+                        continue;
+                    depth_lines[e.perimeter_index].emplace_back(a, b);
+                    depth_info[e.perimeter_index].emplace_back(ent_idx, ap[j]);
+                    const Vec2d t = ab / len;
+                    const Vec2d t_in = j > 0 ? tangent(j - 1) : (is_open ? t : tangent(n - 1));
+                    const size_t parts = std::max<size_t>(1, size_t(std::ceil(len / sample_step)));
+                    for (size_t k = 0; k < parts; ++ k) {
+                        const double f = double(k) / double(parts);
+                        const Vec2d  q = a.cast<double>() + ab * f;
+                        e.samples.push_back({ k == 0 ? a : Point(coord_t(std::llround(q.x())), coord_t(std::llround(q.y()))),
+                                              t, k == 0 ? t_in : t, ap[j] + len * f });
+                    }
+                    if (is_open && j + 1 == nseg)
+                        e.samples.push_back({ b, t, t, ap[j] + len });
+                }
+                if (e.samples.size() < 2)
+                    continue;
+                m_entities.emplace_back(std::move(e));
+            }
+        }
+        for (auto &kv : depth_lines) {
+            Group &g = m_groups[kv.first];
+            g.info      = std::move(depth_info[kv.first]);
+            g.distancer = Distancer(std::move(kv.second));
+        }
+    }
+
+    bool empty() const { return m_entities.empty(); }
+    const std::vector<ArcEntity>& entities() const { return m_entities; }
+
+    // Nearest line of the entities with the given perimeter_index (-1 = absent).
+    bool nearest(const Point &pt, int perimeter_index, ArcHit &h) const
+    {
+        auto it = m_groups.find(perimeter_index);
+        if (it == m_groups.end())
+            return false;
+        const Group &g = it->second;
+        auto [d, line_id, np] = g.distancer.distance_from_lines_extra<false>(pt);
+        if (line_id >= g.info.size())
+            return false;
+        const Line &l = g.distancer.get_line(line_id);
+        const Vec2d dir = (l.b - l.a).cast<double>();
+        const double len = dir.norm();
+        h.dist  = d;
+        h.ent   = g.info[line_id].first;
+        h.along = g.info[line_id].second + (np - l.a.cast<double>()).norm();
+        h.dir   = len > 0. ? Vec2d(dir / len) : Vec2d(1., 0.);
+        h.np    = np;
+        return true;
+    }
+
+private:
+    std::vector<ArcEntity> m_entities;
+    struct Group {
+        Distancer                                  distancer;
+        std::vector<std::pair<uint32_t, double>>   info;
+    };
+    std::map<int, Group> m_groups;
+};
+
+class ArcIndexCache
+{
+public:
+    explicit ArcIndexCache(size_t n_layers) : m_cache(n_layers) {}
+    template<typename RoleFn>
+    const ArcLayerIndex& get(size_t layer_idx, const LayerRegion &layerm, RoleFn &&role_matches, double step)
+    {
+        auto &slot = m_cache[layer_idx];
+        if (! slot)
+            slot = std::make_unique<ArcLayerIndex>(layerm, role_matches, step);
+        return *slot;
+    }
+private:
+    std::vector<std::unique_ptr<ArcLayerIndex>> m_cache;
+};
+
+// Cast every sample of A onto the nearest line of B (same perimeter_index); a sample whose nearest line
+// is not within ~60 degrees of parallel is "unusable".
+static void arc_cover(const ArcEntity &A, const ArcLayerIndex &B, std::vector<ArcCover> &out)
+{
+    out.assign(A.samples.size(), ArcCover());
+    for (size_t i = 0; i < A.samples.size(); ++ i) {
+        const ArcSample &s = A.samples[i];
+        ArcHit h;
+        if (! B.nearest(s.p, A.perimeter_index, h))
+            continue;
+        ArcCover &c = out[i];
+        c.found  = true;
+        c.ent    = h.ent;
+        c.along  = h.along;
+        c.usable = std::max(std::abs(s.t0.dot(h.dir)), std::abs(s.t1.dot(h.dir))) >= 0.5;
+        const Vec2d n(- h.dir.y(), h.dir.x());
+        c.lat    = std::abs((s.p.cast<double>() - h.np).dot(n));
+    }
+}
+
+// A run of consecutive samples (cyclic for closed entities) as an along interval.
+struct ArcRun {
+    size_t first { 0 }, count { 0 };  // sample indices
+    bool   whole { false };
+    double a0    { 0. };              // along of the first sample (0 if whole)
+    double len   { 0. };              // scaled
+};
+
+static inline double arc_along_ext(const ArcEntity &e, size_t i)
+{
+    const size_t n = e.samples.size();
+    return i < n ? e.samples[i].along : e.total + e.samples[i - n].along;
+}
+
+// Maximal runs of true flags (cyclic merge for closed entities), no filtering.
+static std::vector<ArcRun> arc_flag_runs(const ArcEntity &e, const std::vector<char> &f)
+{
+    const size_t N = f.size();
+    const bool closed = ! e.is_open;
+    std::vector<ArcRun> out;
+    size_t n_true = 0;
+    for (char c : f)
+        n_true += c != 0;
+    if (n_true == 0)
+        return out;
+    if (n_true == N) {
+        ArcRun r;
+        r.first = 0; r.count = N; r.whole = true; r.a0 = 0.; r.len = e.total;
+        out.push_back(r);
+        return out;
+    }
+    for (size_t s = 0; s < N; ++ s) {
+        const bool prev = s > 0 ? f[s - 1] != 0 : (closed && f[N - 1] != 0);
+        if (! f[s] || prev)
+            continue;
+        size_t c = 0;
+        while (c < N && (closed ? f[(s + c) % N] != 0 : (s + c < N && f[s + c] != 0)))
+            ++ c;
+        ArcRun r;
+        r.first = s; r.count = c; r.whole = false;
+        r.a0  = e.samples[s].along;
+        r.len = arc_along_ext(e, s + c) - arc_along_ext(e, s);
+        out.push_back(r);
+    }
+    return out;
+}
+
+// Candidate flags -> accepted runs: absorb short fully-"hard" gaps, drop runs shorter than L_min.
+static std::vector<ArcRun> arc_build_runs(const ArcEntity &e, const std::vector<char> &flags, const std::vector<char> &hard,
+                                          double g_min, double L_min)
+{
+    const size_t N = flags.size();
+    const bool closed = ! e.is_open;
+    std::vector<ArcRun> rr = arc_flag_runs(e, flags);
+    if (rr.empty() || rr.front().whole)
+        return rr;
+    std::vector<char> f2 = flags;
+    for (size_t r = 0; r < rr.size(); ++ r) {
+        size_t next = r + 1;
+        if (next >= rr.size()) {
+            if (! closed)
+                continue;
+            next = 0;
+        }
+        const size_t end = rr[r].first + rr[r].count;
+        size_t ns = rr[next].first;
+        if (ns < end)
+            ns += N;
+        if (ns <= end)
+            continue;
+        const double gap = arc_along_ext(e, ns) - arc_along_ext(e, end);
+        if (gap >= g_min)
+            continue;
+        bool all_hard = true;
+        for (size_t i = end; i < ns && all_hard; ++ i)
+            all_hard = hard[i % N] != 0;
+        if (all_hard)
+            for (size_t i = end; i < ns; ++ i)
+                f2[i % N] = 1;
+    }
+    rr = arc_flag_runs(e, f2);
+    std::vector<ArcRun> out;
+    for (const ArcRun &r : rr)
+        if (r.whole || r.len >= L_min)
+            out.push_back(r);
+    return out;
+}
+
+static bool arc_in_run(const ArcEntity &e, const ArcRun &r, double x)
+{
+    if (r.whole)
+        return true;
+    double d = x - r.a0;
+    if (! e.is_open) {
+        d = std::fmod(d, e.total);
+        if (d < 0.)
+            d += e.total;
+        if (d > e.total - 1. && r.len < e.total)   // numerically at the start
+            d = 0.;
+    }
+    return d >= -1. && d <= r.len + 1.;
+}
+
+static bool arc_in_runs(const ArcEntity &e, const std::vector<ArcRun> &runs, double x)
+{
+    for (const ArcRun &r : runs)
+        if (arc_in_run(e, r, x))
+            return true;
+    return false;
+}
+
+// Forbid the samples within +-step (along) of x, plus the sample at or before x. True if a flag was newly set.
+static bool arc_forbid(const ArcEntity &e, std::vector<char> &forbid, double x, double step)
+{
+    const size_t N = e.samples.size();
+    bool changed = false;
+    auto set_range = [&](double lo, double hi) {
+        auto it = std::lower_bound(e.samples.begin(), e.samples.end(), lo,
+            [](const ArcSample &s, double v) { return s.along < v; });
+        for (; it != e.samples.end() && it->along <= hi; ++ it) {
+            char &c = forbid[size_t(it - e.samples.begin())];
+            if (! c) {
+                c = 1;
+                changed = true;
+            }
+        }
+    };
+    if (e.is_open) {
+        x = std::clamp(x, 0., e.total);
+    } else {
+        x = std::fmod(x, e.total);
+        if (x < 0.)
+            x += e.total;
+    }
+    set_range(x - step, x + step);
+    if (! e.is_open) {
+        if (x - step < 0.)
+            set_range(x - step + e.total, e.total);
+        if (x + step > e.total)
+            set_range(0., x + step - e.total);
+    }
+    // sample at or before x
+    auto it = std::upper_bound(e.samples.begin(), e.samples.end(), x,
+        [](double v, const ArcSample &s) { return v < s.along; });
+    size_t idx = it == e.samples.begin() ? (e.is_open ? 0 : N - 1) : size_t(it - e.samples.begin()) - 1;
+    if (! forbid[idx]) {
+        forbid[idx] = 1;
+        changed = true;
+    }
+    return changed;
+}
+
+struct ArcPiece {
+    ExtrusionPath path;
+    double        a0, a1;
+};
+
+// Split the paths of an entity at the given sorted along positions (chain coordinates, see ArcLayerIndex).
+static std::vector<ArcPiece> arc_split_paths(const std::vector<ExtrusionPath> &paths, const std::vector<double> &cuts)
+{
+    constexpr double eps = 10.;
+    std::vector<ArcPiece> out;
+    size_t ci = 0;
+    double pos = 0.;
+    bool   have_last = false;
+    Point  last;
+    for (const ExtrusionPath &path : paths) {
+        const Points &pts = path.polyline.points;
+        if (pts.empty())
+            continue;
+        if (have_last && pts.front() != last)
+            pos += (pts.front() - last).cast<double>().norm();
+        have_last = true;
+        last = pts.back();
+        while (ci < cuts.size() && cuts[ci] <= pos + eps)
+            ++ ci;
+        Points cur { pts.front() };
+        double cur_a0 = pos;
+        auto emit = [&](double a1) {
+            if (cur.size() >= 2)
+                out.push_back({ ExtrusionPath(Polyline(cur), path.attributes()), cur_a0, a1 });
+        };
+        for (size_t j = 1; j < pts.size(); ++ j) {
+            const Point &p0 = pts[j - 1], &p1 = pts[j];
+            const double L = (p1 - p0).cast<double>().norm();
+            if (L <= 0.)
+                continue;
+            const double s0 = pos, s1 = pos + L;
+            while (ci < cuts.size() && cuts[ci] < s1 - eps) {
+                const double c = std::max(cuts[ci], s0);
+                ++ ci;
+                if (c <= cur_a0 + eps)
+                    continue;
+                const double f = (c - s0) / L;
+                const Vec2d q = p0.cast<double>() + (p1 - p0).cast<double>() * f;
+                const Point cp(coord_t(std::llround(q.x())), coord_t(std::llround(q.y())));
+                if (cp != cur.back())
+                    cur.push_back(cp);
+                emit(c);
+                cur = Points { cp };
+                cur_a0 = c;
+            }
+            cur.push_back(p1);
+            pos = s1;
+        }
+        emit(pos);
+        while (ci < cuts.size() && cuts[ci] <= pos + eps)
+            ++ ci;
+    }
+    return out;
+}
+
+static std::vector<double> arc_cut_positions(const ArcEntity &e, const std::vector<ArcRun> &runs)
+{
+    std::vector<double> cuts;
+    for (const ArcRun &r : runs) {
+        if (r.whole)
+            continue;
+        double a1 = r.a0 + r.len;
+        for (double c : { r.a0, a1 }) {
+            if (! e.is_open && c >= e.total)
+                c -= e.total;
+            if (c > 10. && c < e.total - 10.)
+                cuts.push_back(c);
+        }
+    }
+    std::sort(cuts.begin(), cuts.end());
+    return cuts;
+}
+
+
+} // namespace
+
 // Combine perimeters of specific roles across layers, analogous to combine_infill().
 // For each role with every_layers >= 2:
 //   - Groups layers by height (same algorithm as combine_infill stage 1).
@@ -3376,6 +4266,10 @@ void PrintObject::combine_perimeters()
                 return r.is_second_internal_perimeter() && !r.is_bridge();
             };
 
+            // Per-spec role loop index cache (not used for decisions yet).
+            RoleIndexCache role_index_cache(m_layers.size());
+            CombineStats   stats;
+
             // Stage 1: height-based grouping (mirrors combine_infill stage 1).
             std::vector<size_t> combine(m_layers.size(), 0);
             {
@@ -3398,6 +4292,18 @@ void PrintObject::combine_perimeters()
                 combine[m_layers.size() - 1] = n;
             }
 
+            // Apply an action to every path of a loop or multipath entity.
+            auto for_each_loop_path = [](ExtrusionEntity *ee, auto &&action) {
+                if (auto *loop = dynamic_cast<ExtrusionLoop *>(ee)) {
+                    for (ExtrusionPath &path : loop->paths)
+                        action(path);
+                } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(ee)) {
+                    for (ExtrusionPath &path : mpath->paths)
+                        action(path);
+                }
+            };
+
+            // ---- legacy_mask method: the previous union-mask algorithm (kept for comparison) ----
             // Walk island EECs in a layer region's m_perimeters and apply action.
             // Defined here (before Stage 2) so coverage-check lambdas can reference it.
             auto walk = [&](LayerRegion *rm, auto &&action) {
@@ -3419,10 +4325,86 @@ void PrintObject::combine_perimeters()
                 }
             };
 
-            // Stage 2: geometry check and apply. The body is a lambda so the automatic
-            // mode can trial smaller windows: each every-N-layers value is the maximum
-            // group size, and the geometry decides the actual size.
-            auto try_combine_window = [&](size_t group_start, size_t top_idx) -> bool {
+            // ---- legacy_mask per-layer cache (pure speed-up; results identical to recomputing) ----
+            // The polylines / mask of a layer depend only on that layer's role-matching paths and the
+            // mask radius. Entries stay valid while the layer is unmutated; a window that is applied
+            // erases the entries of the layers it mutated. Masks are keyed by radius (one slot per layer).
+            struct LegacyLayerCache {
+                bool      have_polylines { false };
+                bool      have_mask      { false };
+                float     mask_radius    { 0.f };
+                Polylines polylines;
+                Polygons  mask;
+            };
+            std::vector<LegacyLayerCache> legacy_cache;
+            // Both legacy variants share the acceptance test; legacy_mask_v2 differs only in the apply flow.
+            const bool is_legacy_method = cfg.combine_perimeters_method == cpmLegacyMask ||
+                                          cfg.combine_perimeters_method == cpmLegacyMaskV2 ||
+                                          cfg.combine_perimeters_method == cpmLegacyMaskV3;
+            const bool legacy_v2        = cfg.combine_perimeters_method == cpmLegacyMaskV2;
+            const bool legacy_v3        = cfg.combine_perimeters_method == cpmLegacyMaskV3;
+            if (is_legacy_method)
+                legacy_cache.resize(m_layers.size());
+            // Per-layer cache of the mixed-loop veto (independent of the mask radius): -1 unknown, 0 / 1.
+            std::vector<signed char> legacy_mixed_cache(m_layers.size(), -1);
+
+            // Collect polylines from role-matching, non-empty paths in a region.
+            auto legacy_collect_polylines = [&](LayerRegion *rm) -> Polylines {
+                Polylines result;
+                walk(rm, [&](ExtrusionPath &path) {
+                    if (role_matches(path.role()) && !path.polyline.empty())
+                        result.push_back(path.polyline);
+                });
+                return result;
+            };
+
+            // Build a displacement mask from role-matching paths: each centerline
+            // expanded by exactly the accepted displacement (mask_half_width), not by
+            // the bead footprint — the coverage test below is centerline-vs-mask, so
+            // the mask radius is the accepted displacement, kept independent of
+            // per-path widths. End caps must be ROUND: the collected polylines are loop
+            // segments split at the seam, and the default butt cap cuts the mask flush
+            // at the polyline end — the sub-layer's seam-corner segments then stick out
+            // of the top mask as false fragments the width of the wall shift, rejecting
+            // perfectly parallel walls. etOpenRound extends the cap by the radius past
+            // the end, covering the seam region.
+            auto legacy_build_mask = [&](LayerRegion *rm, float half_width) -> Polygons {
+                Polygons mask;
+                walk(rm, [&](ExtrusionPath &path) {
+                    if (role_matches(path.role()) && !path.polyline.empty())
+                        polygons_append(mask, offset(path.polyline, half_width, DefaultLineJoinType, DefaultLineMiterLimit, ClipperLib::etOpenRound));
+                });
+                return union_(mask);
+            };
+
+
+            // Mask radius of a window whose top layer is `top_idx` (see the comment in the window routine).
+            auto legacy_mask_radius = [&](size_t top_idx) -> float {
+                const float width_scaled = m_layers[top_idx]->m_regions[region_id]->flow(flow_role).scaled_width();
+                const double shift_scaled = cfg.combine_perimeters_max_shift.percent ?
+                    0.01 * cfg.combine_perimeters_max_shift.value * width_scaled :
+                    double(scale_(cfg.combine_perimeters_max_shift.value));
+                return float(std::max(shift_scaled, 5.));
+            };
+            auto legacy_polylines_of = [&](size_t idx) -> const Polylines& {
+                LegacyLayerCache &c = legacy_cache[idx];
+                if (! c.have_polylines) {
+                    c.polylines      = legacy_collect_polylines(m_layers[idx]->m_regions[region_id]);
+                    c.have_polylines = true;
+                }
+                return c.polylines;
+            };
+            auto legacy_mask_of = [&](size_t idx, float radius) -> const Polygons& {
+                LegacyLayerCache &c = legacy_cache[idx];
+                if (! c.have_mask || c.mask_radius != radius) {
+                    c.mask        = legacy_build_mask(m_layers[idx]->m_regions[region_id], radius);
+                    c.mask_radius = radius;
+                    c.have_mask   = true;
+                }
+                return c.mask;
+            };
+
+            auto try_combine_window_legacy = [&](size_t group_start, size_t top_idx) -> bool {
                 // Two-way coverage check: only combine when every sub-layer path is
                 // geometrically covered by a top-layer path and vice versa.
                 // Masks are built from actual path geometry — NOT fill_expolygons,
@@ -3434,6 +4416,11 @@ void PrintObject::combine_perimeters()
                 {
                     bool has_mixed_loop = false;
                     for (size_t i = group_start; i <= top_idx && !has_mixed_loop; ++i) {
+                        if (legacy_mixed_cache[i] >= 0) {
+                            has_mixed_loop = legacy_mixed_cache[i] == 1;
+                            continue;
+                        }
+                        bool layer_mixed = false;
                         LayerRegion *rm = m_layers[i]->m_regions[region_id];
                         for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
                             auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
@@ -3450,10 +4437,12 @@ void PrintObject::combine_perimeters()
                                              : p.role().is_second_internal_perimeter())
                                         has_bridge_variant = true;
                                 }
-                                if (has_match && has_bridge_variant) { has_mixed_loop = true; break; }
+                                if (has_match && has_bridge_variant) { layer_mixed = true; break; }
                             }
-                            if (has_mixed_loop) break;
+                            if (layer_mixed) break;
                         }
+                        legacy_mixed_cache[i] = layer_mixed ? 1 : 0;
+                        has_mixed_loop = layer_mixed;
                     }
                     if (has_mixed_loop) return false;
                 }
@@ -3462,36 +4451,7 @@ void PrintObject::combine_perimeters()
                 LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
                 if (top_rm->m_perimeters.entities.empty()) return false;
 
-                // Collect polylines from role-matching, non-empty paths in a region.
-                auto collect_polylines = [&](LayerRegion *rm) -> Polylines {
-                    Polylines result;
-                    walk(rm, [&](ExtrusionPath &path) {
-                        if (role_matches(path.role()) && !path.polyline.empty())
-                            result.push_back(path.polyline);
-                    });
-                    return result;
-                };
-
-                // Build a displacement mask from role-matching paths: each centerline
-                // expanded by exactly the accepted displacement (mask_half_width), not by
-                // the bead footprint — the coverage test below is centerline-vs-mask, so
-                // the mask radius is the accepted displacement, kept independent of
-                // per-path widths. End caps must be ROUND: the collected polylines are loop
-                // segments split at the seam, and the default butt cap cuts the mask flush
-                // at the polyline end — the sub-layer's seam-corner segments then stick out
-                // of the top mask as false fragments the width of the wall shift, rejecting
-                // perfectly parallel walls. etOpenRound extends the cap by the radius past
-                // the end, covering the seam region.
-                auto build_mask = [&](LayerRegion *rm, float half_width) -> Polygons {
-                    Polygons mask;
-                    walk(rm, [&](ExtrusionPath &path) {
-                        if (role_matches(path.role()) && !path.polyline.empty())
-                            polygons_append(mask, offset(path.polyline, half_width, DefaultLineJoinType, DefaultLineMiterLimit, ClipperLib::etOpenRound));
-                    });
-                    return union_(mask);
-                };
-
-                // combine_perimeters_overlap_percent is the minimum footprint OVERLAP
+                // the legacy overlap setting (now combine_perimeters_max_shift) is the minimum footprint OVERLAP
                 // required between the sub-layer and top-layer perimeters, as a percentage
                 // of the nominal perimeter extrusion width: 100% means the perimeters
                 // must be numerically coincident within the geometry tolerance (only
@@ -3509,8 +4469,8 @@ void PrintObject::combine_perimeters()
                 // fraction of the width: longest ≤ 0.25 × width, total ≤ 0.5 × width.
                 const float width_scaled = m_layers[top_idx]->m_regions[region_id]
                     ->flow(flow_role).scaled_width();
-                const float overlap = float(cfg.combine_perimeters_overlap_percent.value) / 100.f;
-                const float mask_half_width = std::max(width_scaled * (1.f - overlap), 5.f);
+                // The mask radius is the max shift (old overlap X% == shift (100-X)%), floored at 5 nm.
+                const float mask_half_width = legacy_mask_radius(top_idx);
                 const float tol_half = 0.25f * width_scaled;
                 auto passes_tolerance = [&](Polylines &&diff) -> bool {
                     double total = 0., longest = 0.;
@@ -3522,20 +4482,18 @@ void PrintObject::combine_perimeters()
                     return longest <= tol_half && total <= 2. * tol_half;
                 };
 
-                Polylines top_polylines = collect_polylines(top_rm);
+                const Polylines &top_polylines = legacy_polylines_of(top_idx);
                 if (top_polylines.empty()) return false;
-                Polygons  top_mask      = build_mask(top_rm, mask_half_width);
+                const Polygons  &top_mask      = legacy_mask_of(top_idx, mask_half_width);
 
                 bool window_ok = true;
                 for (size_t i = group_start; i < top_idx && window_ok; ++i) {
-                    LayerRegion *sub_rm       = m_layers[i]->m_regions[region_id];
-                    Polylines    sub_polylines = collect_polylines(sub_rm);
+                    const Polylines &sub_polylines = legacy_polylines_of(i);
                     if (sub_polylines.empty()) { window_ok = false; break; }
-                    Polygons sub_mask = build_mask(sub_rm, mask_half_width);
                     // Sub→top: every sub-layer path must lie under a top-layer replacement.
                     if (!passes_tolerance(diff_pl(sub_polylines, top_mask))) { window_ok = false; break; }
                     // Top→sub: top-layer paths must not overhang sub-layer geometry.
-                    if (!passes_tolerance(diff_pl(top_polylines, sub_mask))) { window_ok = false; break; }
+                    if (!passes_tolerance(diff_pl(top_polylines, legacy_mask_of(i, mask_half_width)))) { window_ok = false; break; }
                 }
                 if (!window_ok) return false;
 
@@ -3543,21 +4501,52 @@ void PrintObject::combine_perimeters()
                 double H = 0.;
                 for (size_t i = group_start; i <= top_idx; ++i)
                     H += m_layers[i]->height;
-                Flow   cflow = m_layers[top_idx]->m_regions[region_id]->flow(flow_role, H);
-                float  ch    = float(H);
-                float  cw    = cflow.width();
-                double cmm3  = cflow.mm3_per_mm();
 
-                // Scale matching paths on the group-top layer.
-                walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
-                    if (!role_matches(path.role()))
-                        return;
-                    ExtrusionAttributes a = path.attributes();
-                    a.height     = ch;
-                    a.width      = cw;
-                    a.mm3_per_mm = cmm3;
-                    path.set_attributes(a);
-                });
+                if (legacy_v2) {
+                    // Acceptance is region-wide in this method, so a single role-matching top path that
+                    // violates the caps rejects the whole window (no combine): H must not exceed the
+                    // nozzle diameter and every path needs H <= 0.95 * 4 * s_p / pi (merged width >= H).
+                    if (H > nozzle_d + EPSILON)
+                        return false;
+                    bool caps_ok = true;
+                    walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
+                        if (!caps_ok || !role_matches(path.role()))
+                            return;
+                        const double s_p = double(path.attributes().width) - double(path.attributes().height) * (1. - 0.25 * M_PI);
+                        if (! (H <= 0.95 * 4. * s_p / M_PI))
+                            caps_ok = false;
+                    });
+                    if (!caps_ok)
+                        return false;
+                    // Per-path flow: keep the spacing s_p, height H, width s_p + H*(1 - pi/4), mm3_per_mm = H * s_p
+                    // (conserves the volume, preserves Arachne per-path widths).
+                    walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
+                        if (!role_matches(path.role()))
+                            return;
+                        ExtrusionAttributes a = path.attributes();
+                        const double s_p = double(a.width) - double(a.height) * (1. - 0.25 * M_PI);
+                        a.height     = float(H);
+                        a.width      = float(s_p + H * (1. - 0.25 * M_PI));
+                        a.mm3_per_mm = H * s_p;
+                        path.set_attributes(a);
+                    });
+                } else {
+                    Flow   cflow = m_layers[top_idx]->m_regions[region_id]->flow(flow_role, H);
+                    float  ch    = float(H);
+                    float  cw    = cflow.width();
+                    double cmm3  = cflow.mm3_per_mm();
+
+                    // Scale matching paths on the group-top layer.
+                    walk(m_layers[top_idx]->m_regions[region_id], [&](ExtrusionPath &path) {
+                        if (!role_matches(path.role()))
+                            return;
+                        ExtrusionAttributes a = path.attributes();
+                        a.height     = ch;
+                        a.width      = cw;
+                        a.mm3_per_mm = cmm3;
+                        path.set_attributes(a);
+                    });
+                }
 
                 // Void matching paths on non-top layers. Clear the polyline so the
                 // path carries no geometry; the role is intentionally preserved so
@@ -3570,7 +4559,7 @@ void PrintObject::combine_perimeters()
                     // Stash this layer's pre-combine perimeter entity count (counted exactly
                     // like SeamPlacer::get_perimeter_count) so seam placement keeps seeing
                     // the layer's real perimeter structure while it belongs to a combine group.
-                    {
+                    if (sub_rm->m_perimeter_entity_count_pre_combine < 0) {
                         int entity_count = 0;
                         for (const ExtrusionEntity *ee : sub_rm->m_perimeters.entities) {
                             if (ee->is_collection()) {
@@ -3631,10 +4620,941 @@ void PrintObject::combine_perimeters()
                         }
                     }
                 }
+                // The window's layers were mutated: drop their cached polylines / masks.
+                for (size_t i = group_start; i <= top_idx; ++i) {
+                    legacy_cache[i] = LegacyLayerCache{};
+                    legacy_mixed_cache[i] = -1;
+                }
                 return true;
             };
 
-            if (! cfg.automatic_perimeter_combination) {
+            // Stash a layer's pre-combine perimeter entity count (counted exactly like
+            // SeamPlacer::get_perimeter_count) so seam placement keeps seeing the layer's real
+            // perimeter structure while it belongs to a combine group. Only the first voiding
+            // on a layer region stashes (the other role spec must not overwrite it with a
+            // post-combine count).
+            auto stash_pre_combine_count = [](LayerRegion *sub_rm) {
+                if (sub_rm->m_perimeter_entity_count_pre_combine >= 0)
+                    return;
+                int entity_count = 0;
+                for (const ExtrusionEntity *ee : sub_rm->m_perimeters.entities) {
+                    if (ee->is_collection()) {
+                        entity_count += static_cast<const ExtrusionEntityCollection *>(ee)->entities.size();
+                    } else {
+                        if (const auto *ep = dynamic_cast<const ExtrusionPath *>(ee);
+                                ep && ep->attributes().pass_index.has_value()
+                                && *ep->attributes().pass_index == 0)
+                            continue;
+                        ++ entity_count;
+                    }
+                }
+                sub_rm->m_perimeter_entity_count_pre_combine = entity_count;
+            };
+
+            // Remove empty paths from loops/multipaths, then remove now-empty containers and bare
+            // empty paths from each island's entity list of the layers [group_start, top_idx).
+            // Children of island EECs are owned by the EEC; use delete before erase.
+            // Never erase from m_perimeters.entities - that would shift LayerIsland indices.
+            auto purge_empty_perimeters = [&](size_t group_start, size_t top_idx) {
+                for (size_t i = group_start; i < top_idx; ++i) {
+                    LayerRegion *rm = m_layers[i]->m_regions[region_id];
+                    for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                        auto *island = dynamic_cast<ExtrusionEntityCollection *>(ee);
+                        if (!island) continue;
+                        for (ExtrusionEntity *child : island->entities) {
+                            if (auto *loop = dynamic_cast<ExtrusionLoop *>(child)) {
+                                loop->paths.erase(
+                                    std::remove_if(loop->paths.begin(), loop->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    loop->paths.end());
+                            } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(child)) {
+                                mpath->paths.erase(
+                                    std::remove_if(mpath->paths.begin(), mpath->paths.end(),
+                                        [](const ExtrusionPath &p) { return p.polyline.empty(); }),
+                                    mpath->paths.end());
+                            }
+                        }
+                        auto &v = island->entities;
+                        for (auto it = v.begin(); it != v.end(); ) {
+                            bool empty = false;
+                            if (auto *loop  = dynamic_cast<ExtrusionLoop *>(*it))
+                                empty = loop->paths.empty();
+                            else if (auto *mpath = dynamic_cast<ExtrusionMultiPath *>(*it))
+                                empty = mpath->paths.empty();
+                            else if (auto *path = dynamic_cast<ExtrusionPath *>(*it))
+                                empty = path->polyline.empty();
+                            if (empty) { delete *it; it = v.erase(it); }
+                            else ++it;
+                        }
+                    }
+                }
+            };
+
+            // Height cap of one merged bead: the nozzle diameter in fixed mode; the automatic DP driver
+            // lowers it to automatic_internal_perimeters_combination_max_layer_height.
+            double window_h_cap = nozzle_d;
+
+            // Result of evaluating one window (no mutation). `score` is the voided sub-layer loop length
+            // (scaled); the arc method subtracts 0.5 mm per run boundary.
+            struct ArcPlanData {
+                const ArcLayerIndex                            *top { nullptr };
+                std::vector<const ArcLayerIndex*>               subs;
+                std::vector<std::vector<ArcRun>>                runs;  // per top entity
+                std::vector<std::vector<std::vector<ArcRun>>>   vruns; // [sub][sub entity]
+            };
+            struct WindowPlan {
+                bool    valid       { false };
+                double  score       { 0. };
+                size_t  group_start { 0 };
+                size_t  top_idx     { 0 };
+                double  H           { 0. };
+                // loop methods
+                const RoleLoopIndex                 *top_index { nullptr };
+                std::vector<const RoleLoopIndex*>    sub_indices;
+                std::vector<std::vector<int>>        top_to_sub;
+                std::vector<size_t>                  combinable;
+                // arc method
+                std::shared_ptr<ArcPlanData>         arc;
+            };
+
+            // ---- arc_coverage method: partial loops (opt-in, breaks the whole-loop rule) ----
+            ArcIndexCache arc_cache(m_layers.size());
+            // Per-(sub layer, top layer) data reused across the window sizes that share the same top layer.
+            struct ArcPair {
+                std::vector<std::vector<char>>               acc, hard;  // per top entity, per sample
+                std::vector<std::vector<ArcCover>>           scov;       // per sub entity
+            };
+            std::map<size_t, ArcPair> arc_pairs;
+            size_t                    arc_pair_top = size_t(-1);
+            // Same for the loop methods: sub layer -> (top loop -> matched sub loop or -1).
+            std::map<size_t, std::vector<int>> loop_pairs;
+            size_t                             loop_pair_top = size_t(-1);
+            // evaluate(group_start, top_idx) decides a window WITHOUT mutating anything and returns a
+            // plan; apply(plan) performs the mutation. The cached per-layer indexes are built on
+            // unmutated layers, so plans of DISJOINT windows stay valid whatever order they are applied in.
+            auto evaluate_arc = [&](size_t group_start, size_t top_idx) -> WindowPlan {
+                m_print->throw_if_canceled();
+                ++ stats.windows;
+
+                LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
+                if (top_rm->m_perimeters.entities.empty())
+                    return WindowPlan();
+
+                double H = 0.;
+                for (size_t i = group_start; i <= top_idx; ++i)
+                    H += m_layers[i]->height;
+                if (H > window_h_cap + EPSILON)
+                    return WindowPlan();
+
+                const Flow   top_flow     = top_rm->flow(flow_role);
+                const double nominal_sp   = double(top_flow.scaled_spacing());
+                const double shift_scaled = cfg.combine_perimeters_max_shift.percent ?
+                    0.01 * cfg.combine_perimeters_max_shift.value * top_flow.scaled_width() :
+                    double(scale_(cfg.combine_perimeters_max_shift.value));
+                const double step  = double(scale_(0.5));
+                const double g_min = double(scale_(1.0));
+                const double L_min = double(scale_(cfg.combine_perimeters_min_arc.value));
+                auto spacing_of = [&](const ArcEntity &e) { return e.spacing > 0. ? e.spacing : nominal_sp; };
+                auto e_hard_of  = [&](const ArcEntity &a, const ArcEntity &b) { return 0.5 * std::min(spacing_of(a), spacing_of(b)); };
+                auto e_max_of   = [&](const ArcEntity &a, const ArcEntity &b) { return std::min(shift_scaled, e_hard_of(a, b)); };
+
+                const ArcLayerIndex &top = arc_cache.get(top_idx, *top_rm, role_matches, step);
+                if (top.empty())
+                    return WindowPlan();
+                const size_t n_sub = top_idx - group_start;
+                std::vector<const ArcLayerIndex*> subs(n_sub, nullptr);
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
+                    subs[k] = &arc_cache.get(group_start + k, *sub_rm, role_matches, step);
+                    if (subs[k]->empty())
+                        return WindowPlan(); // every sub-layer must have role paths
+                }
+                const std::vector<ArcEntity> &tents = top.entities();
+                const size_t NT = tents.size();
+
+                // Top candidate masks: usable and within e_max of a sub line on EVERY sub-layer.
+                // The per-(sub-layer, top) part is cached across the window sizes sharing the same top.
+                if (arc_pair_top != top_idx) {
+                    arc_pairs.clear();
+                    arc_pair_top = top_idx;
+                }
+                std::vector<const ArcPair*> pairs(n_sub, nullptr);
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    auto it = arc_pairs.find(group_start + k);
+                    if (it == arc_pairs.end()) {
+                        ArcPair pr;
+                        std::vector<ArcCover> cov;
+                        pr.acc.resize(NT);
+                        pr.hard.resize(NT);
+                        for (size_t e = 0; e < NT; ++ e) {
+                            const size_t N = tents[e].samples.size();
+                            pr.acc[e].assign(N, 1);
+                            pr.hard[e].assign(N, 1);
+                            arc_cover(tents[e], *subs[k], cov);
+                            for (size_t i = 0; i < N; ++ i) {
+                                const ArcCover &c = cov[i];
+                                if (! c.found || ! c.usable) {
+                                    pr.acc[e][i] = 0;
+                                    pr.hard[e][i] = 0;
+                                    continue;
+                                }
+                                const ArcEntity &se = subs[k]->entities()[c.ent];
+                                if (c.lat > e_max_of(tents[e], se))
+                                    pr.acc[e][i] = 0;
+                                if (c.lat > e_hard_of(tents[e], se))
+                                    pr.hard[e][i] = 0;
+                            }
+                        }
+                        // Sub -> top coverage (independent of the accepted runs).
+                        pr.scov.resize(subs[k]->entities().size());
+                        for (size_t sidx = 0; sidx < pr.scov.size(); ++ sidx)
+                            arc_cover(subs[k]->entities()[sidx], top, pr.scov[sidx]);
+                        it = arc_pairs.emplace(group_start + k, std::move(pr)).first;
+                    }
+                    pairs[k] = &it->second;
+                }
+                std::vector<std::vector<char>> acc(NT), hard(NT), forbid(NT);
+                for (size_t e = 0; e < NT; ++ e) {
+                    const size_t N = tents[e].samples.size();
+                    acc[e].assign(N, 1);
+                    hard[e].assign(N, 1);
+                    forbid[e].assign(N, 0);
+                    for (size_t k = 0; k < n_sub; ++ k)
+                        for (size_t i = 0; i < N; ++ i) {
+                            acc[e][i]  &= pairs[k]->acc[e][i];
+                            hard[e][i] &= pairs[k]->hard[e][i];
+                        }
+                }
+                // scov[k][s] is the sub -> top coverage of sub entity s.
+                std::vector<const std::vector<std::vector<ArcCover>>*> scov(n_sub);
+                for (size_t k = 0; k < n_sub; ++ k)
+                    scov[k] = &pairs[k]->scov;
+
+                // Fixed point: accepted top runs <-> void-eligible sub samples.
+                std::vector<std::vector<ArcRun>>                 runs(NT);
+                std::vector<std::vector<std::vector<char>>>      vgood(n_sub);
+                bool stable = false;
+                for (int iter = 0; iter < 60 && ! stable; ++ iter) {
+                    bool changed = false;
+                    bool any_run = false;
+                    for (size_t e = 0; e < NT; ++ e) {
+                        const size_t N = tents[e].samples.size();
+                        std::vector<char> f(N), h(N);
+                        for (size_t i = 0; i < N; ++ i) {
+                            f[i] = acc[e][i] && ! forbid[e][i];
+                            h[i] = hard[e][i] && ! forbid[e][i];
+                        }
+                        runs[e] = arc_build_runs(tents[e], f, h, g_min, L_min);
+                        // Height cap per run: H <= 0.95 * 4 * s_p / pi on every spanned path.
+                        for (const ArcRun &r : runs[e]) {
+                            double min_sp = DBL_MAX;
+                            std::vector<std::pair<double, double>> ivs;
+                            if (r.whole)
+                                ivs.emplace_back(0., tents[e].total);
+                            else {
+                                ivs.emplace_back(r.a0, std::min(r.a0 + r.len, tents[e].total));
+                                if (! tents[e].is_open && r.a0 + r.len > tents[e].total)
+                                    ivs.emplace_back(0., r.a0 + r.len - tents[e].total);
+                            }
+                            for (const auto &iv : ivs)
+                                for (const ArcPathSpan &sp : tents[e].spans)
+                                    if (sp.a1 > iv.first + 1. && sp.a0 < iv.second - 1.)
+                                        min_sp = std::min(min_sp, sp.s_p);
+                            if (min_sp != DBL_MAX && ! (H <= 0.95 * 4. * min_sp / M_PI)) {
+                                for (size_t i = 0; i < r.count; ++ i)
+                                    forbid[e][(r.first + i) % N] = 1;
+                                changed = true;
+                            } else
+                                any_run = true;
+                        }
+                    }
+                    if (changed)
+                        continue;
+                    if (! any_run)
+                        return WindowPlan();
+                    // Sub void masks.
+                    for (size_t k = 0; k < n_sub; ++ k) {
+                        const auto &sents = subs[k]->entities();
+                        vgood[k].resize(sents.size());
+                        for (size_t s = 0; s < sents.size(); ++ s) {
+                            const std::vector<ArcCover> &cov = (*scov[k])[s];
+                            const size_t N = sents[s].samples.size();
+                            std::vector<char> &good = vgood[k][s];
+                            std::vector<char> mapped(N, 0);
+                            good.assign(N, 0);
+                            for (size_t i = 0; i < N; ++ i) {
+                                const ArcCover &c = cov[i];
+                                if (! c.found || ! arc_in_runs(tents[c.ent], runs[c.ent], c.along))
+                                    continue;
+                                mapped[i] = 1;
+                                good[i] = c.usable && c.lat <= e_max_of(sents[s], tents[c.ent]);
+                            }
+                            // Void runs shorter than the minimum arc are not allowed.
+                            for (const ArcRun &r : arc_flag_runs(sents[s], good))
+                                if (! r.whole && r.len < L_min)
+                                    for (size_t i = 0; i < r.count; ++ i)
+                                        good[(r.first + i) % N] = 0;
+                            for (size_t i = 0; i < N; ++ i)
+                                if (mapped[i] && ! good[i])
+                                    changed |= arc_forbid(tents[cov[i].ent], forbid[cov[i].ent], cov[i].along, step);
+                        }
+                    }
+                    stable = ! changed;
+                }
+                if (! stable)
+                    return WindowPlan();
+
+                // Void runs per sub entity; every sub-layer must lose something.
+                std::vector<std::vector<std::vector<ArcRun>>> vruns(n_sub);
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    const auto &sents = subs[k]->entities();
+                    vruns[k].resize(sents.size());
+                    size_t n_void = 0;
+                    for (size_t s = 0; s < sents.size(); ++ s) {
+                        vruns[k][s] = arc_flag_runs(sents[s], vgood[k][s]);
+                        n_void += vruns[k][s].size();
+                    }
+                    if (n_void == 0)
+                        return WindowPlan();
+                }
+
+                // Score: voided sub-layer length minus 0.5 mm per boundary of an accepted top run.
+                WindowPlan plan;
+                plan.valid       = true;
+                plan.group_start = group_start;
+                plan.top_idx     = top_idx;
+                plan.H           = H;
+                double void_len = 0., n_boundaries = 0.;
+                for (size_t k = 0; k < n_sub; ++ k)
+                    for (const auto &vr : vruns[k])
+                        for (const ArcRun &r : vr)
+                            void_len += r.len;
+                for (size_t e = 0; e < NT; ++ e)
+                    for (const ArcRun &r : runs[e])
+                        if (! r.whole)
+                            n_boundaries += tents[e].is_open ? double(r.first > 0) + double(r.first + r.count < tents[e].samples.size()) : 2.;
+                plan.score = void_len - n_boundaries * double(scale_(0.5));
+                plan.arc = std::make_shared<ArcPlanData>();
+                plan.arc->top   = &top;
+                plan.arc->subs  = std::move(subs);
+                plan.arc->runs  = std::move(runs);
+                plan.arc->vruns = std::move(vruns);
+                return plan;
+            };
+
+            auto apply_arc = [&](const WindowPlan &plan) {
+                const size_t group_start = plan.group_start, top_idx = plan.top_idx;
+                const double H     = plan.H;
+                const double L_min = double(scale_(cfg.combine_perimeters_min_arc.value));
+                const ArcPlanData &ap = *plan.arc;
+                const std::vector<ArcEntity> &tents = ap.top->entities();
+                const size_t NT    = tents.size();
+                const size_t n_sub = top_idx - group_start;
+                const auto &subs  = ap.subs;
+                const auto &runs  = ap.runs;
+                const auto &vruns = ap.vruns;
+
+                // ---- Apply: top ----
+                ++ stats.windows_combined;
+                for (size_t e = 0; e < NT; ++ e) {
+                    if (runs[e].empty())
+                        continue;
+                    const ArcEntity &te = tents[e];
+                    std::vector<ExtrusionPath> *paths = nullptr;
+                    if (auto *loop = dynamic_cast<ExtrusionLoop*>(te.entity))
+                        paths = &loop->paths;
+                    else if (auto *mp = dynamic_cast<ExtrusionMultiPath*>(te.entity))
+                        paths = &mp->paths;
+                    if (paths == nullptr)
+                        continue;
+                    auto thicken = [&](ExtrusionPath &path) {
+                        ExtrusionAttributes a = path.attributes();
+                        const double s_p = double(a.width) - double(a.height) * (1. - 0.25 * M_PI);
+                        a.height     = float(H);
+                        a.width      = float(s_p + H * (1. - 0.25 * M_PI));
+                        a.mm3_per_mm = H * s_p;
+                        path.set_attributes(a);
+                    };
+                    const std::vector<double> cuts = arc_cut_positions(te, runs[e]);
+                    if (cuts.empty()) {
+                        for (ExtrusionPath &path : *paths)
+                            thicken(path);
+                    } else {
+                        std::vector<ArcPiece> pieces = arc_split_paths(*paths, cuts);
+                        std::vector<ExtrusionPath> np;
+                        np.reserve(pieces.size());
+                        for (ArcPiece &pc : pieces) {
+                            if (arc_in_runs(te, runs[e], 0.5 * (pc.a0 + pc.a1)))
+                                thicken(pc.path);
+                            np.emplace_back(std::move(pc.path));
+                        }
+                        *paths = std::move(np);
+                    }
+                    for (const ArcRun &r : runs[e]) {
+                        ++ stats.arc_runs;
+                        stats.arc_len += r.len;
+                        if (! r.whole)
+                            stats.arc_boundaries += te.is_open ? size_t(r.first > 0) + size_t(r.first + r.count < te.samples.size()) : 2;
+                    }
+                }
+
+                // ---- Apply: sub-layers ----
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
+                    stash_pre_combine_count(sub_rm);
+                    sub_rm->m_perimeters_moved_to_upper_layer = true;
+                    const auto &sents = subs[k]->entities();
+                    for (size_t s = 0; s < sents.size(); ++ s) {
+                        const std::vector<ArcRun> &vr = vruns[k][s];
+                        if (vr.empty())
+                            continue;
+                        const ArcEntity &se = sents[s];
+                        for (const ArcRun &r : vr) {
+                            stats.arc_void_len += r.len;
+                            if (r.whole)
+                                stats.arc_short_whole_voids += r.len < L_min;
+                            else {
+                                stats.arc_short_partial_voids += r.len < L_min - 1.;
+                                stats.arc_shortest_partial_void = std::min(stats.arc_shortest_partial_void, r.len);
+                            }
+                        }
+                        std::vector<ExtrusionPath> *paths = nullptr;
+                        bool is_open = se.is_open;
+                        if (auto *loop = dynamic_cast<ExtrusionLoop*>(se.entity))
+                            paths = &loop->paths;
+                        else if (auto *mp = dynamic_cast<ExtrusionMultiPath*>(se.entity))
+                            paths = &mp->paths;
+                        if (paths == nullptr)
+                            continue;
+                        if (vr.front().whole) {
+                            for (ExtrusionPath &path : *paths)
+                                path.polyline = Polyline{};
+                            continue;
+                        }
+                        std::vector<ArcPiece> pieces = arc_split_paths(*paths, arc_cut_positions(se, vr));
+                        std::vector<char> keep(pieces.size());
+                        for (size_t i = 0; i < pieces.size(); ++ i)
+                            keep[i] = ! arc_in_runs(se, vr, 0.5 * (pieces[i].a0 + pieces[i].a1));
+                        std::vector<std::vector<ExtrusionPath>> chains;
+                        bool in_chain = false;
+                        for (size_t i = 0; i < pieces.size(); ++ i) {
+                            if (! keep[i]) {
+                                in_chain = false;
+                                continue;
+                            }
+                            if (! in_chain)
+                                chains.emplace_back();
+                            chains.back().emplace_back(std::move(pieces[i].path));
+                            in_chain = true;
+                        }
+                        if (! is_open && chains.size() > 1 && ! pieces.empty() && keep.front() && keep.back()) {
+                            // The remaining arc wraps across the closure of the loop.
+                            for (ExtrusionPath &p : chains.front())
+                                chains.back().emplace_back(std::move(p));
+                            chains.erase(chains.begin());
+                        }
+                        auto *island = static_cast<ExtrusionEntityCollection*>(sub_rm->m_perimeters.entities[se.island_idx]);
+                        auto pos = std::find(island->entities.begin(), island->entities.end(), se.entity);
+                        if (pos == island->entities.end())
+                            continue;
+                        const size_t at = size_t(pos - island->entities.begin());
+                        std::vector<ExtrusionEntity*> repl;
+                        for (auto &ch : chains)
+                            repl.push_back(new ExtrusionMultiPath(ExtrusionPaths(std::move(ch))));
+                        island->entities.erase(island->entities.begin() + at);
+                        island->entities.insert(island->entities.begin() + at, repl.begin(), repl.end());
+                        delete se.entity;
+                    }
+                }
+                purge_empty_perimeters(group_start, top_idx);
+            };
+
+            // Stage 2: per-loop matching and apply. The body is a lambda so the automatic
+            // mode can trial smaller windows: each every-N-layers value is the maximum
+            // group size, and the geometry decides the actual size.
+            auto evaluate_loop = [&](size_t group_start, size_t top_idx) -> WindowPlan {
+                m_print->throw_if_canceled();
+                ++ stats.windows;
+
+                // Only proceed when the top layer has perimeters for this region.
+                LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
+                if (top_rm->m_perimeters.entities.empty()) return WindowPlan();
+
+                const Flow top_flow = top_rm->flow(flow_role);
+                const double width_scaled = top_flow.scaled_width();
+                // Max shift: percent of the nominal perimeter width, or an absolute length.
+                const double shift_scaled = cfg.combine_perimeters_max_shift.percent ?
+                    0.01 * cfg.combine_perimeters_max_shift.value * width_scaled :
+                    double(scale_(cfg.combine_perimeters_max_shift.value));
+
+                const RoleLoopIndex &top_index = role_index_cache.get(top_idx, *top_rm, role_matches);
+                if (top_index.empty()) return WindowPlan();
+
+                // For every sub-layer: top loop -> matched sub loop (or -1).
+                const size_t n_sub = top_idx - group_start;
+                std::vector<const RoleLoopIndex*> sub_indices(n_sub, nullptr);
+                std::vector<std::vector<int>>     top_to_sub(n_sub);
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
+                    sub_indices[k] = &role_index_cache.get(group_start + k, *sub_rm, role_matches);
+                    if (sub_indices[k]->empty()) return WindowPlan(); // every sub-layer must have role paths
+                    if (loop_pair_top != top_idx) {
+                        loop_pairs.clear();
+                        loop_pair_top = top_idx;
+                    }
+                    auto it = loop_pairs.find(group_start + k);
+                    if (it == loop_pairs.end())
+                        it = loop_pairs.emplace(group_start + k, match_role_loops(*sub_indices[k], top_index, shift_scaled, double(top_flow.scaled_spacing()),
+                                                    cfg.combine_perimeters_method != cpmLoopStrict, stats)).first;
+                    top_to_sub[k] = it->second;
+                }
+
+                // Sum actual layer heights for the combined bead.
+                double H = 0.;
+                for (size_t i = group_start; i <= top_idx; ++i)
+                    H += m_layers[i]->height;
+
+                // Global height cap: the nozzle diameter (as in Stage 1 and combine_infill). The
+                // extruder max_layer_height limits layers, not a merged bead, so it is not used here;
+                // the automatic mode limit is automatic_internal_perimeters_combination_max_layer_height.
+                if (H > window_h_cap + EPSILON)
+                    return WindowPlan();
+
+                // A top loop is combinable iff it is matched on every sub-layer and every
+                // role-matching path satisfies H <= 0.95 * 4 * s_p / pi, i.e. the merged
+                // bead width s_p + H*(1 - pi/4) stays >= H.
+                std::vector<size_t> combinable;
+                for (size_t t = 0; t < top_index.loop_count(); ++ t) {
+                    bool all = true;
+                    for (size_t k = 0; k < n_sub && all; ++ k)
+                        all = top_to_sub[k][t] >= 0;
+                    if (all) {
+                        for_each_loop_path(const_cast<ExtrusionEntity*>(top_index.loop(t).entity), [&](ExtrusionPath &path) {
+                            if (! all || ! role_matches(path.role()))
+                                return;
+                            const double s_p = double(path.attributes().width) - double(path.attributes().height) * (1. - 0.25 * M_PI);
+                            if (! (H <= 0.95 * 4. * s_p / M_PI))
+                                all = false;
+                        });
+                    }
+                    if (all)
+                        combinable.push_back(t);
+                }
+                if (combinable.empty()) return WindowPlan();
+
+                WindowPlan plan;
+                plan.valid       = true;
+                plan.group_start = group_start;
+                plan.top_idx     = top_idx;
+                plan.H           = H;
+                // Score: total voided sub-layer loop length.
+                for (size_t k = 0; k < n_sub; ++ k)
+                    for (size_t t : combinable)
+                        plan.score += sub_indices[k]->loop(size_t(top_to_sub[k][t])).length;
+                plan.top_index   = &top_index;
+                plan.sub_indices = std::move(sub_indices);
+                plan.top_to_sub  = std::move(top_to_sub);
+                plan.combinable  = std::move(combinable);
+                return plan;
+            };
+
+            auto apply_loop = [&](const WindowPlan &plan) {
+                const size_t group_start = plan.group_start, top_idx = plan.top_idx;
+                const size_t n_sub = top_idx - group_start;
+                const double H = plan.H;
+                const RoleLoopIndex &top_index = *plan.top_index;
+                const auto &sub_indices = plan.sub_indices;
+                const auto &top_to_sub  = plan.top_to_sub;
+                const auto &combinable  = plan.combinable;
+                ++ stats.windows_combined;
+                stats.loops_combined += combinable.size();
+
+                // Per-path flow: keep the path's spacing s_p = w_p - h*(1 - pi/4), set the
+                // height to H, width to s_p + H*(1 - pi/4) and mm3_per_mm = H * s_p. This
+                // conserves the thin volume and preserves Arachne per-path widths. With
+                // variable layer heights the voided beads had their own heights; we assume
+                // the same spacing s_p across the window (volume = H * s_p).
+                for (size_t t : combinable)
+                    for_each_loop_path(const_cast<ExtrusionEntity*>(top_index.loop(t).entity), [&](ExtrusionPath &path) {
+                        if (!role_matches(path.role()))
+                            return;
+                        ExtrusionAttributes a = path.attributes();
+                        const double s_p = double(a.width) - double(a.height) * (1. - 0.25 * M_PI);
+                        a.height     = float(H);
+                        a.width      = float(s_p + H * (1. - 0.25 * M_PI));
+                        a.mm3_per_mm = H * s_p;
+                        path.set_attributes(a);
+                    });
+
+                // Void matching paths of the matched sub loops. Clear the polyline so the
+                // path carries no geometry; the role is intentionally preserved so
+                // role-gated consumers (e.g. split_with_seam in GCode.cpp) see a
+                // valid perimeter role and do not perform an out-of-bounds access.
+                // Mark the layer region so GCodeGenerator::process_layer() can defer
+                // the CoolingBuffer flush and evaluate the group under N×T.
+                for (size_t k = 0; k < n_sub; ++k) {
+                    LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
+                    stash_pre_combine_count(sub_rm);
+                    for (size_t t : combinable)
+                        for_each_loop_path(const_cast<ExtrusionEntity*>(sub_indices[k]->loop(size_t(top_to_sub[k][t])).entity),
+                            [&](ExtrusionPath &path) {
+                                if (role_matches(path.role()))
+                                    path.polyline = Polyline{};
+                            });
+                    sub_rm->m_perimeters_moved_to_upper_layer = true; // >= 1 loop voided (combinable is non-empty)
+                }
+
+                purge_empty_perimeters(group_start, top_idx);
+            };
+
+            // ---- legacy_mask_v3: union masks per loop (mask-based, loop-granular) ----
+            // Per-layer cache of the eligible loops with their polylines and masks. Valid while the layer is
+            // unmutated; the layers of an applied window are reset. Masks are built serially on demand
+            // (the parallel prefill only fills each loop's own-radius mask into its own slot).
+            std::vector<V3Layer> v3_cache;
+            if (legacy_v3)
+                v3_cache.resize(m_layers.size());
+            // (sub layer, top layer) -> per top loop the matched sub loop index or -1.
+            std::map<std::pair<size_t, size_t>, std::vector<int>> v3_pairs;
+            // Debug counters (no influence on decisions).
+            size_t v3_n_layer_pairs = 0, v3_n_pair_tests = 0, v3_n_bbox_pass = 0, v3_n_matches = 0, v3_n_demand_masks = 0;
+            double v3_match_ms = 0., v3_ph2_ms = 0., v3_ph3_ms = 0., v3_prefill_ms = 0., v3_layer_ms = 0.;
+
+            // Radius of a mask: the max shift resolved against a nominal width (percent) or absolute, floored at 5 nm.
+            auto v3_radius = [&](double width_scaled) -> float {
+                const double shift_scaled = cfg.combine_perimeters_max_shift.percent ?
+                    0.01 * cfg.combine_perimeters_max_shift.value * width_scaled :
+                    double(scale_(cfg.combine_perimeters_max_shift.value));
+                return float(std::max(shift_scaled, 5.));
+            };
+            auto v3_build_layer = [&](LayerRegion *rm) -> V3Layer {
+                V3Layer out;
+                out.built = true;
+                for (ExtrusionEntity *ee : rm->m_perimeters.entities) {
+                    auto *island = dynamic_cast<ExtrusionEntityCollection*>(ee);
+                    if (island == nullptr)
+                        continue;
+                    for (ExtrusionEntity *child : island->entities) {
+                        const std::vector<ExtrusionPath> *paths = nullptr;
+                        bool is_open = false, clockwise = false;
+                        if (auto *loop = dynamic_cast<ExtrusionLoop*>(child)) {
+                            paths = &loop->paths;
+                            clockwise = loop->is_clockwise();
+                        } else if (auto *mpath = dynamic_cast<ExtrusionMultiPath*>(child)) {
+                            paths = &mpath->paths;
+                            is_open = true;
+                        } else
+                            continue;
+                        size_t n_match = 0, n_other = 0;
+                        for (const ExtrusionPath &p : *paths)
+                            (role_matches(p.role()) ? n_match : n_other) ++;
+                        if (n_match == 0 || n_other > 0)
+                            continue; // not of this role, or mixed (bridge): skipped individually
+                        V3Loop l;
+                        l.entity    = child;
+                        l.is_open   = is_open;
+                        l.clockwise = clockwise;
+                        std::vector<double> widths;
+                        Points pts;
+                        for (const ExtrusionPath &p : *paths) {
+                            if (p.polyline.points.size() < 2)
+                                continue;
+                            if (l.perimeter_index < 0 && p.attributes().perimeter_index.has_value())
+                                l.perimeter_index = int(*p.attributes().perimeter_index);
+                            l.polylines.push_back(p.polyline);
+                            widths.push_back(double(scale_(double(p.width()))));
+                            pts.insert(pts.end(), p.polyline.points.begin(), p.polyline.points.end());
+                        }
+                        if (l.polylines.empty())
+                            continue;
+                        std::sort(widths.begin(), widths.end());
+                        l.width = widths[widths.size() / 2];
+                        l.bbox  = BoundingBox(pts);
+                        out.loops.emplace_back(std::move(l));
+                    }
+                }
+                return out;
+            };
+            auto v3_build_mask = [](const V3Loop &l, float radius) -> Polygons {
+                // Consecutive path polylines that share an endpoint are chained into one open polyline, so
+                // Clipper offsets (and self-unions) one long line instead of unioning many short overlapping ones.
+                Polylines chains;
+                for (const Polyline &pl : l.polylines) {
+                    if (! chains.empty() && chains.back().points.back() == pl.points.front())
+                        chains.back().points.insert(chains.back().points.end(), pl.points.begin() + 1, pl.points.end());
+                    else
+                        chains.push_back(pl);
+                }
+                Polygons mask;
+                for (const Polyline &pl : chains)
+                    polygons_append(mask, offset(pl, radius, DefaultLineJoinType, DefaultLineMiterLimit, ClipperLib::etOpenRound));
+                return chains.size() > 1 ? union_(mask) : mask;
+            };
+            auto v3_layer = [&](size_t idx) -> V3Layer& {
+                V3Layer &L = v3_cache[idx];
+                if (! L.built)
+                    L = v3_build_layer(m_layers[idx]->m_regions[region_id]);
+                return L;
+            };
+            // Pairing sub layer -> top layer: top loop index -> matched sub loop index (or -1).
+            auto v3_match = [&](size_t sub_idx, size_t top_idx) -> const std::vector<int>& {
+                auto it = v3_pairs.find({ sub_idx, top_idx });
+                if (it != v3_pairs.end())
+                    return it->second;
+                const auto t_match0 = std::chrono::steady_clock::now();
+                ++ v3_n_layer_pairs;
+                V3Layer &S = v3_layer(sub_idx);
+                V3Layer &T = v3_layer(top_idx);
+                struct Cand { double score; size_t s, t; };
+                std::vector<Cand> cands;
+                auto passes = [](const Polylines &diff, double width) {
+                    const double tol_half = 0.25 * width;
+                    double total = 0., longest = 0.;
+                    for (const Polyline &pl : diff) {
+                        const double l = pl.length();
+                        total += l;
+                        longest = std::max(longest, l);
+                    }
+                    return longest <= tol_half && total <= 2. * tol_half;
+                };
+                auto total_len = [](const Polylines &diff) { double t = 0.; for (const Polyline &pl : diff) t += pl.length(); return t; };
+                // Phase 1 (serial): candidate pairs behind the cheap tests.
+                struct Pair { size_t s, t; double w; float r; double score; bool ok; };
+                std::vector<Pair> pairs;
+                for (size_t si = 0; si < S.loops.size(); ++ si) {
+                    const V3Loop &s = S.loops[si];
+                    for (size_t ti = 0; ti < T.loops.size(); ++ ti) {
+                        const V3Loop &t = T.loops[ti];
+                        if (t.perimeter_index != s.perimeter_index || t.is_open != s.is_open ||
+                            (! s.is_open && t.clockwise != s.clockwise))
+                            continue;
+                        ++ v3_n_pair_tests;
+                        const double w = std::min(s.width, t.width);
+                        const float  r = v3_radius(w);
+                        BoundingBox  b = s.bbox;
+                        b.offset(double(r));
+                        if (! b.overlap(t.bbox))
+                            continue;
+                        ++ v3_n_bbox_pass;
+                        pairs.push_back({ si, ti, w, r, 0., false });
+                    }
+                }
+                // Phase 2: masks still missing at the pair radii, built in parallel (disjoint slots).
+                const auto t_ph2 = std::chrono::steady_clock::now();
+                {
+                    struct Need { bool top; size_t loop; float r; };
+                    std::vector<Need> need;
+                    auto has_mask = [](const V3Loop &l, float r) { for (const auto &m : l.masks) if (m.first == r) return true; return false; };
+                    for (const Pair &p : pairs) {
+                        if (! has_mask(T.loops[p.t], p.r)) need.push_back({ true, p.t, p.r });
+                        if (! has_mask(S.loops[p.s], p.r)) need.push_back({ false, p.s, p.r });
+                    }
+                    std::sort(need.begin(), need.end(), [](const Need &a, const Need &b) {
+                        return std::tie(a.top, a.loop, a.r) < std::tie(b.top, b.loop, b.r); });
+                    need.erase(std::unique(need.begin(), need.end(), [](const Need &a, const Need &b) {
+                        return a.top == b.top && a.loop == b.loop && a.r == b.r; }), need.end());
+                    std::vector<Polygons> built(need.size());
+                    tbb::parallel_for(tbb::blocked_range<size_t>(0, need.size()),
+                        [&](const tbb::blocked_range<size_t> &range) {
+                            PRINT_OBJECT_TIME_LIMIT_MILLIS(PRINT_OBJECT_TIME_LIMIT_DEFAULT);
+                            for (size_t i = range.begin(); i < range.end(); ++ i) {
+                                m_print->throw_if_canceled();
+                                built[i] = v3_build_mask(need[i].top ? T.loops[need[i].loop] : S.loops[need[i].loop], need[i].r);
+                            }
+                        });
+                    for (size_t i = 0; i < need.size(); ++ i)
+                        (need[i].top ? T.loops[need[i].loop] : S.loops[need[i].loop]).masks.emplace_back(need[i].r, std::move(built[i]));
+                    v3_n_demand_masks += need.size();
+                }
+                const auto t_ph3 = std::chrono::steady_clock::now();
+                v3_ph2_ms += std::chrono::duration<double, std::milli>(t_ph3 - t_ph2).count();
+                // Phase 3: the mutual coverage tests in parallel (read-only).
+                auto find_mask = [](const V3Loop &l, float r) -> const Polygons& {
+                    for (const auto &m : l.masks)
+                        if (m.first == r)
+                            return m.second;
+                    static const Polygons empty;
+                    return empty; // not reached: phase 2 built it
+                };
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, pairs.size()),
+                    [&](const tbb::blocked_range<size_t> &range) {
+                        PRINT_OBJECT_TIME_LIMIT_MILLIS(PRINT_OBJECT_TIME_LIMIT_DEFAULT);
+                        for (size_t i = range.begin(); i < range.end(); ++ i) {
+                            m_print->throw_if_canceled();
+                            Pair &p = pairs[i];
+                            const V3Loop &s = S.loops[p.s], &t = T.loops[p.t];
+                            const Polylines d1 = diff_pl(s.polylines, find_mask(t, p.r));
+                            if (! passes(d1, p.w))
+                                continue;
+                            const Polylines d2 = diff_pl(t.polylines, find_mask(s, p.r));
+                            if (! passes(d2, p.w))
+                                continue;
+                            p.ok    = true;
+                            p.score = total_len(d1) + total_len(d2);
+                        }
+                    });
+                v3_ph3_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_ph3).count();
+                for (const Pair &p : pairs)
+                    if (p.ok) {
+                        ++ v3_n_matches;
+                        cands.push_back({ p.score, p.s, p.t });
+                    }
+                std::sort(cands.begin(), cands.end(), [](const Cand &a, const Cand &b) {
+                    return a.score != b.score ? a.score < b.score : (a.s != b.s ? a.s < b.s : a.t < b.t); });
+                std::vector<int>  top_to_sub(T.loops.size(), -1);
+                std::vector<char> sub_used(S.loops.size(), 0);
+                for (const Cand &c : cands)
+                    if (top_to_sub[c.t] < 0 && ! sub_used[c.s]) {
+                        top_to_sub[c.t] = int(c.s);
+                        sub_used[c.s]   = 1;
+                    }
+                v3_match_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_match0).count();
+                return v3_pairs.emplace(std::make_pair(sub_idx, top_idx), std::move(top_to_sub)).first->second;
+            };
+            auto try_combine_window_v3 = [&](size_t group_start, size_t top_idx) -> bool {
+                LayerRegion *top_rm = m_layers[top_idx]->m_regions[region_id];
+                if (top_rm->m_perimeters.entities.empty())
+                    return false;
+                double H = 0.;
+                for (size_t i = group_start; i <= top_idx; ++ i)
+                    H += m_layers[i]->height;
+                if (H > nozzle_d + EPSILON)
+                    return false;
+                V3Layer &T = v3_layer(top_idx);
+                if (T.loops.empty())
+                    return false;
+                const size_t n_sub = top_idx - group_start;
+                std::vector<const std::vector<int>*> top_to_sub(n_sub, nullptr);
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    if (v3_layer(group_start + k).loops.empty())
+                        return false;
+                    top_to_sub[k] = &v3_match(group_start + k, top_idx);
+                }
+                // Combinable top loop: matched on every sub-layer and H <= 0.95 * 4 * s_p / pi on every path.
+                std::vector<size_t> combinable;
+                for (size_t t = 0; t < T.loops.size(); ++ t) {
+                    bool all = true;
+                    for (size_t k = 0; k < n_sub && all; ++ k)
+                        all = (*top_to_sub[k])[t] >= 0;
+                    if (all)
+                        for_each_loop_path(T.loops[t].entity, [&](ExtrusionPath &path) {
+                            if (! all || ! role_matches(path.role()))
+                                return;
+                            const double s_p = double(path.attributes().width) - double(path.attributes().height) * (1. - 0.25 * M_PI);
+                            if (! (H <= 0.95 * 4. * s_p / M_PI))
+                                all = false;
+                        });
+                    if (all)
+                        combinable.push_back(t);
+                }
+                if (combinable.empty())
+                    return false;
+                // Per-path flow on the combinable top loops (as legacy_mask_v2 / the loop methods).
+                for (size_t t : combinable)
+                    for_each_loop_path(T.loops[t].entity, [&](ExtrusionPath &path) {
+                        if (! role_matches(path.role()))
+                            return;
+                        ExtrusionAttributes a = path.attributes();
+                        const double s_p = double(a.width) - double(a.height) * (1. - 0.25 * M_PI);
+                        a.height     = float(H);
+                        a.width      = float(s_p + H * (1. - 0.25 * M_PI));
+                        a.mm3_per_mm = H * s_p;
+                        path.set_attributes(a);
+                    });
+                // Void the matched sub loops (whole loops).
+                for (size_t k = 0; k < n_sub; ++ k) {
+                    LayerRegion *sub_rm = m_layers[group_start + k]->m_regions[region_id];
+                    stash_pre_combine_count(sub_rm);
+                    V3Layer &S = v3_layer(group_start + k);
+                    for (size_t t : combinable)
+                        for_each_loop_path(S.loops[size_t((*top_to_sub[k])[t])].entity, [&](ExtrusionPath &path) {
+                            if (role_matches(path.role()))
+                                path.polyline = Polyline{};
+                        });
+                    sub_rm->m_perimeters_moved_to_upper_layer = true;
+                }
+                purge_empty_perimeters(group_start, top_idx);
+                // Drop everything cached about the mutated layers.
+                for (size_t i = group_start; i <= top_idx; ++ i)
+                    v3_cache[i] = V3Layer{};
+                for (auto it = v3_pairs.begin(); it != v3_pairs.end(); ) {
+                    if ((it->first.first >= group_start && it->first.first <= top_idx) ||
+                        (it->first.second >= group_start && it->first.second <= top_idx))
+                        it = v3_pairs.erase(it);
+                    else
+                        ++ it;
+                }
+                return true;
+            };
+
+            auto evaluate_window = [&](size_t group_start, size_t top_idx) -> WindowPlan {
+                return cfg.combine_perimeters_method == cpmArcCoverage ? evaluate_arc(group_start, top_idx) :
+                                                                         evaluate_loop(group_start, top_idx);
+            };
+            auto apply_window = [&](const WindowPlan &plan) {
+                if (cfg.combine_perimeters_method == cpmArcCoverage)
+                    apply_arc(plan);
+                else
+                    apply_loop(plan);
+            };
+            // evaluate + apply if valid (fixed driver; legacy_mask keeps its own all-in-one routine).
+            auto try_combine_window = [&](size_t group_start, size_t top_idx) -> bool {
+                m_print->throw_if_canceled();
+                if (legacy_v3)
+                    return try_combine_window_v3(group_start, top_idx);
+                if (is_legacy_method)
+                    return try_combine_window_legacy(group_start, top_idx);
+                const WindowPlan plan = evaluate_window(group_start, top_idx);
+                if (! plan.valid)
+                    return false;
+                apply_window(plan);
+                return true;
+            };
+
+            if (legacy_v3) {
+                // Parallel prefill of the per-layer loop data and of each loop's own-radius mask (read-only on
+                // the layers; each iteration writes its own slot). Pair radii that differ are built on demand.
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, m_layers.size()),
+                    [&](const tbb::blocked_range<size_t> &range) {
+                        PRINT_OBJECT_TIME_LIMIT_MILLIS(PRINT_OBJECT_TIME_LIMIT_DEFAULT);
+                        for (size_t idx = range.begin(); idx < range.end(); ++ idx) {
+                            m_print->throw_if_canceled();
+                            if (m_layers[idx]->id() == 0 || m_layers[idx]->m_regions[region_id]->m_perimeters.entities.empty())
+                                continue;
+                            V3Layer L = v3_build_layer(m_layers[idx]->m_regions[region_id]);
+                            for (V3Loop &l : L.loops) {
+                                const float r = v3_radius(l.width);
+                                l.masks.emplace_back(r, v3_build_mask(l, r));
+                            }
+                            v3_cache[idx] = std::move(L);
+                        }
+                    });
+                m_print->throw_if_canceled();
+            } else if (is_legacy_method) {
+                // Parallel prefill of the per-layer polylines and masks (read-only on the layers; each
+                // iteration writes its own slot). Each layer uses the radius it would have as a window top;
+                // windows needing another radius (non-uniform layer heights / flows) rebuild on demand.
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, m_layers.size()),
+                    [&](const tbb::blocked_range<size_t> &range) {
+                        PRINT_OBJECT_TIME_LIMIT_MILLIS(PRINT_OBJECT_TIME_LIMIT_DEFAULT);
+                        for (size_t idx = range.begin(); idx < range.end(); ++ idx) {
+                            m_print->throw_if_canceled();
+                            if (m_layers[idx]->id() == 0 || m_layers[idx]->m_regions[region_id]->m_perimeters.entities.empty())
+                                continue;
+                            LegacyLayerCache &c = legacy_cache[idx];
+                            c.polylines      = legacy_collect_polylines(m_layers[idx]->m_regions[region_id]);
+                            c.have_polylines = true;
+                            if (! c.polylines.empty()) {
+                                c.mask_radius = legacy_mask_radius(idx);
+                                c.mask        = legacy_build_mask(m_layers[idx]->m_regions[region_id], c.mask_radius);
+                                c.have_mask   = true;
+                            }
+                        }
+                    });
+                m_print->throw_if_canceled();
+            }
+
+            if (! cfg.automatic_internal_perimeters_combination) {
                 // Fixed groups: every N layers (height-capped). A group that fails the
                 // coverage check is not combined at all.
                 for (size_t top_idx = 0; top_idx < m_layers.size(); ++top_idx) {
@@ -3644,8 +5564,104 @@ void PrintObject::combine_perimeters()
                         continue;
                     try_combine_window(top_idx + 1 - n, top_idx);
                 }
+            } else if (! is_legacy_method) {
+                // Automatic combination, loop and arc methods: dynamic programming over layers.
+                // dp[i] = best total score covering layers [0, i); transition: a window of s layers
+                // [j, j+s-1] ending at i = j+s, size 1 scoring 0. Layer id 0 is never grouped.
+                // Window size is bounded by every_layers and by H_max = min(nozzle_d, the automatic
+                // max layer height setting); every window is evaluated once, without mutation.
+                const double H_max = std::min(nozzle_d,
+                    cfg.automatic_internal_perimeters_combination_max_layer_height.get_abs_value(nozzle_d));
+                window_h_cap = H_max;
+                const size_t n_layers = m_layers.size();
+                std::vector<double> dp(n_layers + 1, 0.);
+                std::vector<size_t> take(n_layers + 1, 1); // size of the last group of the optimum ending at i
+                std::map<std::pair<size_t, size_t>, double> memo; // (start, size) -> score; invalid windows are absent
+                size_t evaluated = 0, valid_windows = 0;
+                for (size_t i = 1; i <= n_layers; ++ i) {
+                    m_print->throw_if_canceled();
+                    // Candidate sizes: 1 (layer i-1 alone, score 0), then 2..s_hi.
+                    double best = dp[i - 1];
+                    size_t best_s = 1;
+                    // Sizes beyond the height cap / every_layers / layer 0 are not candidates.
+                    size_t s_hi = 1;
+                    {
+                        double height_sum = m_layers[i - 1]->height;
+                        if (m_layers[i - 1]->id() != 0)
+                            for (size_t s = 2; s <= size_t(spec.every_layers) && s <= i; ++ s) {
+                                const Layer &layer = *m_layers[i - s];
+                                if (layer.id() == 0)
+                                    break;
+                                height_sum += layer.height;
+                                if (height_sum > H_max + EPSILON)
+                                    break;
+                                s_hi = s;
+                            }
+                    }
+                    for (size_t s = 2; s <= s_hi; ++ s) {
+                        const size_t j = i - s;
+                        ++ evaluated;
+                        const WindowPlan plan = evaluate_window(j, i - 1);
+                        if (! plan.valid) {
+                            // Loop methods: a valid window of size s+1 implies a valid one of size s
+                            // (more matching constraints, larger H), so larger sizes are skipped.
+                            if (cfg.combine_perimeters_method != cpmArcCoverage)
+                                break;
+                            continue;
+                        }
+                        ++ valid_windows;
+                        memo[{ j, s }] = plan.score;
+                        const double cand = dp[j] + plan.score;
+                        // Deterministic tie-break: larger windows (hence lower start index) win ties.
+                        if (cand >= best) {
+                            best   = cand;
+                            best_s = s;
+                        }
+                    }
+                    dp[i]   = best;
+                    take[i] = best_s;
+                }
+                // Backtrack.
+                std::vector<std::pair<size_t, size_t>> chosen; // (start, size >= 2)
+                std::map<size_t, size_t> histogram;
+                for (size_t i = n_layers; i > 0; ) {
+                    const size_t s = take[i];
+                    ++ histogram[s];
+                    if (s >= 2)
+                        chosen.emplace_back(i - s, s);
+                    i -= s;
+                }
+                std::reverse(chosen.begin(), chosen.end());
+                // Chosen windows are disjoint (each layer belongs to exactly one group), so applying
+                // one never invalidates another one's inputs. A plan is re-evaluated just before its
+                // apply (cheap, and keeps memory at O(1) plans instead of O(L * N_max)); the cached
+                // layer indexes of its own layers are still unmutated at that point.
+                double total_score = 0.;
+                size_t last_end = 0;
+                for (const auto &[start, s] : chosen) {
+                    m_print->throw_if_canceled();
+                    if (start < last_end) // cheap disjointness check (cannot happen by construction)
+                        throw Slic3r::SlicingError("combine_perimeters: overlapping DP windows");
+                    last_end = start + s;
+                    const CombineStats saved = stats;
+                    arc_pair_top  = size_t(-1); // never reuse DP-time pair data once layers get mutated
+                    loop_pair_top = size_t(-1);
+                    const WindowPlan plan = evaluate_window(start, start + s - 1);
+                    stats = saved; // the DP evaluation already counted this window
+                    if (! plan.valid || plan.score != memo[std::make_pair(start, s)])
+                        throw Slic3r::SlicingError("combine_perimeters: DP window re-evaluation mismatch");
+                    total_score += plan.score;
+                    apply_window(plan);
+                }
+                std::string hist;
+                for (const auto &[sz, cnt] : histogram)
+                    hist += (hist.empty() ? "" : ",") + std::to_string(sz) + ":" + std::to_string(cnt);
+                BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: dp role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
+                    << " windows_evaluated=" << evaluated << " windows_valid=" << valid_windows << " groups_chosen=" << chosen.size()
+                    << " dp_score_mm=" << unscale<double>(dp[n_layers]) << " applied_score_mm=" << unscale<double>(total_score)
+                    << " H_max=" << H_max << " size_histogram={" << hist << "}";
             } else {
-                // Automatic combination: each every-N-layers value is the MAXIMUM group
+                // Automatic combination (legacy_mask): each every-N-layers value is the MAXIMUM group
                 // size; the overlap check decides the actual size. Sliding greedy scan:
                 // from each layer take the largest group (within the maximum and the
                 // nozzle height cap) whose coverage check passes; if none does, the
@@ -3680,6 +5696,25 @@ void PrintObject::combine_perimeters()
                         ++ start;
                 }
             }
+            if (! is_legacy_method)
+                BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
+                    << " sub_loops=" << stats.sub_loops << " matched_loops=" << stats.matched_loops
+                    << " windows_tried=" << stats.windows << " windows_combined=" << stats.windows_combined
+                    << " loops_combined=" << stats.loops_combined;
+            if (cfg.combine_perimeters_method == cpmArcCoverage)
+                BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: arc role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
+                    << " runs_accepted=" << stats.arc_runs << " boundaries=" << stats.arc_boundaries
+                    << " boundaries_per_window=" << (stats.windows_combined ? double(stats.arc_boundaries) / double(stats.windows_combined) : 0.)
+                    << " accepted_mm=" << unscale<double>(stats.arc_len) << " voided_mm=" << unscale<double>(stats.arc_void_len)
+                    << " voided_mm_per_window=" << (stats.windows_combined ? unscale<double>(stats.arc_void_len) / double(stats.windows_combined) : 0.)
+                    << " short_partial_voids=" << stats.arc_short_partial_voids << " short_whole_voids=" << stats.arc_short_whole_voids
+                    << " shortest_partial_void_mm=" << (stats.arc_shortest_partial_void == DBL_MAX ? 0. : unscale<double>(stats.arc_shortest_partial_void));
+            if (legacy_v3)
+                BOOST_LOG_TRIVIAL(debug) << "combine_perimeters: v3 role=" << (spec.role == ExtrusionRole::FirstInternalPerimeter ? "first" : "second")
+                    << " layer_pairs=" << v3_n_layer_pairs << " pair_tests=" << v3_n_pair_tests << " bbox_pass=" << v3_n_bbox_pass
+                    << " matches=" << v3_n_matches << " pair_masks=" << v3_n_demand_masks
+                    << " match_ms=" << v3_match_ms << " phase2_ms=" << v3_ph2_ms << " phase3_ms=" << v3_ph3_ms;
+            BOOST_LOG_TRIVIAL(trace) << "combine_perimeters: built " << role_index_cache.builds() << " role loop indexes";
         }
     }
 }

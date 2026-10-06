@@ -380,11 +380,6 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
         // polygon orientation (holes are clockwise), not from the matched seam-data entry —
         // bounding-box matching degenerates on rings, where the outer and hole bboxes nest.
         place_scarf_seam = wall_role == LoopWallRole::Outer && loop_polygon.is_counter_clockwise();
-    // The scarf joint assumes the external wall is printed every layer. With
-    // external_perimeter_every_layers > 1 the external wall itself is printed sparsely
-    // and the joint has no sound per-layer geometry (Print::validate warns about it).
-    if (region->config().external_perimeter_every_layers.value > 1)
-        place_scarf_seam = false;
     const bool is_smooth{
         seam_choice.previous_index != seam_choice.next_index ||
         perimeter.angle_types[seam_choice.previous_index] == Perimeters::AngleType::smooth

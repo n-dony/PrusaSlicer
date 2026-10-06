@@ -387,6 +387,16 @@ static const t_config_enum_values s_keys_map_TwoPassBridgeScope {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TwoPassBridgeScope)
 
+static const t_config_enum_values s_keys_map_CombinePerimetersMethod {
+    { "legacy_mask",   int(cpmLegacyMask)   },
+    { "legacy_mask_v2", int(cpmLegacyMaskV2) },
+    { "legacy_mask_v3", int(cpmLegacyMaskV3) },
+    { "loop_strict",   int(cpmLoopStrict)   },
+    { "loop_tolerant", int(cpmLoopTolerant) },
+    { "arc_coverage",  int(cpmArcCoverage)  },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(CombinePerimetersMethod)
+
 static void assign_printer_technology_to_unknown(t_optiondef_map &options, PrinterTechnology printer_technology)
 {
     for (std::pair<const t_config_option_key, ConfigOptionDef> &kvp : options)
@@ -2239,19 +2249,10 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("external_perimeter_every_layers", coInt);
-    def->label = L("External perimeter every N layers");
-    def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print external perimeters only every N layers. Intermediate layers skip the external perimeter. Default 1 (every layer). Set >= 2 to coarsen external perimeters while keeping internal structure.");
-    def->sidetext = L("layers");
-    def->min = 1;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(1));
-
     def = this->add("first_internal_perimeter_every_layers", coInt);
     def->label = L("First internal perimeter every N layers");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print first internal perimeters only every N layers. Default 1 (every layer). Set >= 2 to create a groove or combine thick perimeters.");
+    def->tooltip = L("Print first internal perimeters only every N layers. Default 1 (every layer). Set >= 2 to combine the perimeters of N layers into thicker ones.");
     def->sidetext = L("layers");
     def->min = 1;
     def->mode = comAdvanced;
@@ -2266,22 +2267,70 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("automatic_perimeter_combination", coBool);
-    def->label = L("Automatic perimeter combination");
+    def = this->add("automatic_internal_perimeters_combination", coBool);
+    def->label = L("Automatic internal perimeters combination");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Combine internal perimeters adaptively. Each perimeter every-N-layers value becomes the maximum group size: vertical walls combine at the maximum, sloped walls in smaller groups that still pass the overlap check, and zones that cannot pair stay uncombined. When disabled, groups are fixed at N layers and a group that fails the overlap check is not combined at all.");
+    def->tooltip = L("Automatically combine all internal perimeters (everything except the external perimeter) of several layers into thicker ones. "
+                     "Each loop is compared with the matching loop of the top layer of its group using the maximum shift check, and the groups are chosen adaptively: "
+                     "vertical walls combine in large groups, sloped walls in smaller groups, and zones that cannot be combined stay on their own layers. "
+                     "The every-N-layers value of each internal perimeter role becomes the maximum group size, and a role takes part only if its value is 2 or more. "
+                     "When disabled, groups are fixed at N layers and a loop that fails the shift check is printed normally on its own layers.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("combine_perimeters_overlap_percent", coPercent);
-    def->label = L("Combine perimeters overlap");
+    def = this->add("automatic_internal_perimeters_combination_max_layer_height", coFloatOrPercent);
+    def->label = L("Automatic internal perimeters combination - Max layer height");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Minimum footprint overlap required between the combined layers' perimeters, as a percentage of the nominal perimeter extrusion width. 100% combines only perfectly vertical walls (the perimeters must coincide); 50% accepts a horizontal shift of half the extrusion width; 0% requires no overlap but the beads must still touch — the loosest setting. Smaller values combine more, larger values restrict combining to straighter walls.");
-    def->sidetext = L("%");
+    def->tooltip = L("Maximum layer height for combining internal perimeters when automatic internal perimeters combination is enabled. "
+                     "Maximum layer height could be specified either as an absolute in millimeters value or as a percentage of nozzle diameter. "
+                     "For printing with different nozzle diameters, it is recommended to use percentage value over absolute value.");
+    def->sidetext = L("mm or %");
     def->min = 0;
-    def->max = 100;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionPercent(50));
+    def->set_default_value(new ConfigOptionFloatOrPercent(100., true));
+
+    def = this->add("combine_perimeters_max_shift", coFloatOrPercent);
+    def->label = L("Combine perimeters max shift");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Maximum horizontal shift between an internal perimeter on a thin layer and the thicker bead that replaces it, in mm or as a percentage of the perimeter extrusion width. "
+                     "Each loop is compared with the matching loop of the group's top layer; loops that shift more are printed normally on their own layers. "
+                     "Equivalent wall angle from vertical: about 42 deg for 2 x 0.1 mm layers, 31 deg for 2 x 0.15 mm, 17 deg for 4 x 0.1 mm. "
+                     "Lower values keep more of the wall bonded, higher values combine more.");
+    def->sidetext = L("mm or %");
+    def->min = 0;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloatOrPercent(20., true));
+
+    def = this->add("combine_perimeters_method", coEnum);
+    def->label = L("Combine perimeters method");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("How loops of the thin layers are matched with the loops of the group's top layer. "
+                     "Whole loops only: a loop is either fully combined or left untouched. "
+                     "Legacy: the previous algorithm, union mask of all same-role centrelines, region-wide all-or-nothing (kept for comparison). "
+                     "Legacy mask v2: same acceptance test as the legacy mask method, but combined beads keep per-path widths and conserve the extruded volume. "
+                     "Legacy mask v3: mask-based like the legacy method but evaluated per loop: mixed bridge loops are skipped individually, a bad stretch of one loop no longer blocks the others, widths from the loops' own paths. "
+                     "Whole loops, strict: one-to-one loop identity, worst-sample shift within the maximum shift; lowest coverage. "
+                     "Whole loops, tolerant: coverage-based acceptance (90th percentile shift within the maximum shift, worst sample within half a spacing). "
+                     "Arcs (partial loops): per-sample coverage; only the arcs that are covered on every thin layer are combined, the rest of a loop stays as it is (breaks the whole-loop rule; kept for comparison).");
+    def->set_enum<CombinePerimetersMethod>({
+        { "legacy_mask",   L("Legacy (union mask, region-wide)") },
+        { "legacy_mask_v2", L("Legacy mask v2 (per-path flow)")  },
+        { "legacy_mask_v3", L("Legacy mask v3 (per-loop masks)") },
+        { "loop_strict",   L("Whole loops, strict")              },
+        { "loop_tolerant", L("Whole loops, tolerant")            },
+        { "arc_coverage",  L("Arcs (partial loops)")             },
+    });
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionEnum<CombinePerimetersMethod>(cpmLoopTolerant));
+
+    def = this->add("combine_perimeters_min_arc", coFloat);
+    def->label = L("Combine perimeters minimum arc");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Minimum length of a partial-loop arc that may be combined (arc coverage method only).");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(5.));
 
     auto def_infill_anchor_min = def = this->add("infill_anchor", coFloatOrPercent);
     def->label = L("Length of the infill anchor");
@@ -5658,6 +5707,7 @@ static std::set<std::string> PrintConfigDef_ignore = {
     "wiping_volumes_extruders", // Removed in 2.7.3-alpha1.
     "wipe_tower_x", "wipe_tower_y", "wipe_tower_rotation_angle", // Removed in 2.9.0
     "support_points_minimal_distance", // End of the using in 2.9.1 (change algorithm for the support generator)
+    "external_perimeter_every_layers", // Removed in the per-loop combine_perimeters rework.
 };
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
@@ -5721,6 +5771,12 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         // gcode_label_objects used to be a bool (the behavior was nothing or "octoprint"), it is
         // and enum since PrusaSlicer 2.6.2.
         value = value == "1" ? "octoprint" : "disabled";
+    } else if (opt_key == "automatic_perimeter_combination") {
+        opt_key = "automatic_internal_perimeters_combination";
+    } else if (opt_key == "combine_perimeters_overlap_percent") {
+        // The overlap percentage was replaced by a maximum shift; the old semantics are not comparable, so use the default.
+        opt_key = "combine_perimeters_max_shift";
+        value = "20%";
     } else if (opt_key == "octoprint_host") {
         opt_key = "print_host";
     } else if (opt_key == "octoprint_cafile") {

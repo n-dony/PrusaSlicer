@@ -291,6 +291,16 @@ enum class ToolChangeOrderingType
     Cyclic,
 };
 
+// Matching method of the internal perimeters combination (combine_perimeters).
+enum CombinePerimetersMethod {
+    cpmLegacyMask,
+    cpmLegacyMaskV2,
+    cpmLegacyMaskV3,
+    cpmLoopStrict,
+    cpmLoopTolerant,
+    cpmArcCoverage,
+};
+
 enum class TwoPassBridgeScope : uint8_t {
     Disabled,
     BridgeInfillOnly,
@@ -343,6 +353,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CoolingSlowdownLogicType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CoolingCombineLogicType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ToolChangeOrderingType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TwoPassBridgeScope)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CombinePerimetersMethod)
 
 #undef CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS
 
@@ -812,11 +823,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                  infill_extruder))
     ((ConfigOptionFloatOrPercent,       infill_extrusion_width))
     ((ConfigOptionInt,                  infill_every_layers))
-    ((ConfigOptionInt,                  external_perimeter_every_layers))
     ((ConfigOptionInt,                  first_internal_perimeter_every_layers))
     ((ConfigOptionInt,                  second_internal_perimeter_every_layers))
-    ((ConfigOptionBool,                 automatic_perimeter_combination))
-    ((ConfigOptionPercent,              combine_perimeters_overlap_percent))
+    ((ConfigOptionBool,                 automatic_internal_perimeters_combination))
+    ((ConfigOptionFloatOrPercent,       automatic_internal_perimeters_combination_max_layer_height))
+    ((ConfigOptionFloatOrPercent,       combine_perimeters_max_shift))
+    ((ConfigOptionEnum<CombinePerimetersMethod>, combine_perimeters_method))
+    ((ConfigOptionFloat,                combine_perimeters_min_arc))
     ((ConfigOptionFloatOrPercent,       infill_overlap))
     ((ConfigOptionFloat,                infill_speed))
     // Ironing options

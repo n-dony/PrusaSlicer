@@ -335,11 +335,14 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
                     "infill_speed", "bridge_speed", "bridge_anchor_length", "over_bridge_speed" })
         toggle_field(el, have_infill || has_solid_infill);
 
-    toggle_field("external_perimeter_every_layers",       have_perimeters);
     toggle_field("first_internal_perimeter_every_layers", have_perimeters);
     toggle_field("second_internal_perimeter_every_layers", have_perimeters);
-    toggle_field("automatic_perimeter_combination",       have_perimeters);
-    toggle_field("combine_perimeters_overlap_percent",   have_perimeters);
+    toggle_field("automatic_internal_perimeters_combination", have_perimeters);
+    toggle_field("automatic_internal_perimeters_combination_max_layer_height",
+                 have_perimeters && config->opt_bool("automatic_internal_perimeters_combination"));
+    toggle_field("combine_perimeters_max_shift",          have_perimeters);
+    toggle_field("combine_perimeters_method",             have_perimeters);
+    toggle_field("combine_perimeters_min_arc",            have_perimeters && config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == cpmArcCoverage);
 
     const bool has_ensure_vertical_shell_thickness = config->opt_enum<EnsureVerticalShellThickness>("ensure_vertical_shell_thickness") != EnsureVerticalShellThickness::Disabled;
     toggle_field("top_solid_min_thickness", !has_spiral_vase && has_top_solid_infill && has_ensure_vertical_shell_thickness);
