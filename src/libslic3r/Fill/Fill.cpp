@@ -555,10 +555,15 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         // with_spacing() below, so no further halving is applied for round flows.
         // Flat flows (thick_bridges off, perimeters) keep the half-flow/half-height
         // split, which preserves the width there.
+        // Two-pass is skipped (single-pass fallback) when half the layer height is below the
+        // minimum layer height of the extruder printing this fill.
+        const bool two_pass_ok =
+            layerm.layer()->object()->config().two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled &&
+            two_pass_height_allowed(layerm.layer()->object()->print()->config(), surface_fill.params.extruder, params.layer_height);
         const bool two_pass_round_bridge =
             ! params.use_arachne &&
             surface_fill.surface.is_bridge() && surface_fill.params.flow.bridge() &&
-            layerm.layer()->object()->config().two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled;
+            two_pass_ok;
 
         for (ExPolygon &expoly : surface_fill.expolygons) {
 			// Spacing is modified by the filler to indicate adjustments. Reset it for each expolygon.
@@ -623,8 +628,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     // (all pass-0 before all pass-1 across the layer) requires reordering in
                     // get_normal_extrusions() (ExtrusionOrder.cpp) before path smoothing —
                     // deferred to a follow-on commit.
-                    const bool do_two_pass = surface_fill.surface.is_bridge()
-                        && obj_cfg.two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled;
+                    const bool do_two_pass = surface_fill.surface.is_bridge() && two_pass_ok;
                     const bool do_crosshatch = do_two_pass
                         && two_pass_is_crosshatch(obj_cfg.two_pass_bridge_scope.value);
 

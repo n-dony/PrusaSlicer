@@ -4052,10 +4052,12 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Layers and Perimeters");
     def->tooltip = L("[Experimental] Re-extrude bridge features in two passes to improve quality. "
                       "BridgeInfillOnly applies two-pass to bridge infill only (legacy behavior). "
-                      "BridgeInfillAndPerims also applies two-pass to overhang perimeters (classic perimeter mode only). "
+                      "BridgeInfillAndPerims also applies two-pass to overhang perimeters (classic and Arachne perimeter modes). "
                       "CrosshatchInfillOnly prints the second bridge infill pass perpendicular to the first, over its footprint. "
                       "CrosshatchInfillAndPerims combines crosshatch infill with same-angle two-pass perimeters. "
-                      "Note: no dwell time between passes — each pass immediately follows the previous.");
+                      "Note: no dwell time between passes — each pass immediately follows the previous. "
+                      "Two-pass is skipped (normal single-pass bridge) on layers where half the layer height "
+                      "is below the minimum layer height of the extruder printing the bridge.");
     def->set_enum<TwoPassBridgeScope>({
         { "disabled",                 L("Disabled")                  },
         { "bridge_infill_only",       L("Bridge infill only")        },
