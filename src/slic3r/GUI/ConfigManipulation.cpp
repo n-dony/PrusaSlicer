@@ -342,6 +342,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
                  have_perimeters && config->opt_bool("automatic_internal_perimeters_combination"));
     toggle_field("combine_perimeters_max_shift",          have_perimeters);
     toggle_field("combine_perimeters_method",             have_perimeters);
+    {
+        const auto cpm = config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method");
+        toggle_field("combine_perimeters_atomic_fragments", have_perimeters &&
+            (cpm == cpmLoopStrict || cpm == cpmLoopTolerant || cpm == cpmLegacyMaskV3));
+    }
     toggle_field("combine_perimeters_min_arc",            have_perimeters && config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == cpmArcCoverage);
 
     const bool has_ensure_vertical_shell_thickness = config->opt_enum<EnsureVerticalShellThickness>("ensure_vertical_shell_thickness") != EnsureVerticalShellThickness::Disabled;

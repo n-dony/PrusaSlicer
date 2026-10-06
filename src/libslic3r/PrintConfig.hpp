@@ -828,6 +828,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 automatic_internal_perimeters_combination))
     ((ConfigOptionFloatOrPercent,       automatic_internal_perimeters_combination_max_layer_height))
     ((ConfigOptionFloatOrPercent,       combine_perimeters_max_shift))
+    ((ConfigOptionBool,                 combine_perimeters_atomic_fragments))
     ((ConfigOptionEnum<CombinePerimetersMethod>, combine_perimeters_method))
     ((ConfigOptionFloat,                combine_perimeters_min_arc))
     ((ConfigOptionFloatOrPercent,       infill_overlap))

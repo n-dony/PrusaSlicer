@@ -670,6 +670,7 @@ inline bool has_compatible_layer_regions(const PrintRegionConfig &config, const 
            config.first_internal_perimeter_every_layers                 == other_config.first_internal_perimeter_every_layers &&
            config.second_internal_perimeter_every_layers                == other_config.second_internal_perimeter_every_layers &&
            config.combine_perimeters_max_shift                          == other_config.combine_perimeters_max_shift &&
+           config.combine_perimeters_atomic_fragments                   == other_config.combine_perimeters_atomic_fragments &&
            config.combine_perimeters_method                             == other_config.combine_perimeters_method &&
            config.combine_perimeters_min_arc                            == other_config.combine_perimeters_min_arc &&
            config.automatic_internal_perimeters_combination             == other_config.automatic_internal_perimeters_combination &&

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <limits>
 #include <algorithm>
+#include <array>
 #include <catch2/catch_approx.hpp>
 
 #include "libslic3r/Config.hpp"
@@ -15,6 +16,7 @@
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/PerimeterGenerator.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/SurfaceCollection.hpp"
 #include "libslic3r/libslic3r.h"
@@ -1491,6 +1493,23 @@ SCENARIO("Fork: combine_perimeters config and legacy profiles", "[Perimeters][Co
         CHECK(! cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->percent);
         CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->value == Approx(0.1));
     }
+    GIVEN("the atomic fragments option") {
+        CHECK(! FullPrintConfig().combine_perimeters_atomic_fragments.value);
+        DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
+        CHECK(! cfg.opt_bool("combine_perimeters_atomic_fragments"));
+        cfg.set_deserialize_strict("combine_perimeters_atomic_fragments", "1");
+        CHECK(cfg.opt_bool("combine_perimeters_atomic_fragments"));
+        CHECK(cfg.opt_serialize("combine_perimeters_atomic_fragments") == "1");
+        cfg.set_deserialize_strict("combine_perimeters_atomic_fragments", "0");
+        CHECK(! cfg.opt_bool("combine_perimeters_atomic_fragments"));
+        // Profile paths: ini round trip and the preset option list.
+        const DynamicPrintConfig on = load("combine_perimeters_atomic_fragments = 1\n");
+        CHECK(on.opt_bool("combine_perimeters_atomic_fragments"));
+        const DynamicPrintConfig off = load("combine_perimeters_atomic_fragments = 0\n");
+        CHECK(! off.opt_bool("combine_perimeters_atomic_fragments"));
+        const auto &keys = Preset::print_options();
+        CHECK(std::find(keys.begin(), keys.end(), "combine_perimeters_atomic_fragments") != keys.end());
+    }
 }
 
 SCENARIO("Fork: combine_perimeters automatic internal perimeters combination", "[Perimeters]")
@@ -1562,4 +1581,117 @@ SCENARIO("Fork: combine_perimeters frustum wall angles at 0.1 mm layers", "[Peri
                 CHECK(! gcode_has_internal_height(gcode, 200));
         }
     }
+}
+
+namespace {
+
+// Per (layer, island, perimeter_index) group of >= 2 open internal fragments of the top-level islands:
+// the number of fragments with a thickened path and without. Mixed = both.
+struct FragmentGroups {
+    size_t groups = 0, mixed = 0, thick_groups = 0;
+};
+
+FragmentGroups fragment_groups(const Print &print)
+{
+    FragmentGroups out;
+    const auto &layers = print.objects().front()->layers();
+    for (size_t li = 0; li < layers.size(); ++ li) {
+        const double lh = layers[li]->height;
+        for (const LayerRegion *lr : layers[li]->regions()) {
+            const auto &islands = lr->perimeters().entities;
+            for (size_t ii = 0; ii < islands.size(); ++ ii) {
+                if (! islands[ii]->is_collection())
+                    continue;
+                std::map<int, std::pair<size_t, size_t>> by_depth; // perimeter_index -> (thick, thin)
+                for (const ExtrusionEntity *c : static_cast<const ExtrusionEntityCollection*>(islands[ii])->entities) {
+                    const auto *mp = dynamic_cast<const ExtrusionMultiPath*>(c);
+                    if (mp == nullptr)
+                        continue;
+                    bool internal = ! mp->paths.empty(), thick = false;
+                    for (const ExtrusionPath &p : mp->paths) {
+                        internal &= is_internal_role(p);
+                        thick    |= is_thick(p, lh);
+                    }
+                    if (! internal || ! mp->paths.front().attributes().perimeter_index.has_value())
+                        continue;
+                    auto &cnt = by_depth[int(*mp->paths.front().attributes().perimeter_index)];
+                    ++ (thick ? cnt.first : cnt.second);
+                }
+                for (const auto &kv : by_depth)
+                    if (kv.second.first + kv.second.second >= 2) {
+                        ++ out.groups;
+                        out.thick_groups += kv.second.first > 0;
+                        out.mixed        += kv.second.first > 0 && kv.second.second > 0;
+                    }
+            }
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+// Loft of a convex CCW polygon at z = 0 shrunk towards its centroid by `top_scale` at z = height (fan-triangulated
+// caps). An elongated polygon that narrows to a thin end makes Arachne split its inner walls into open fragments.
+static Slic3r::TriangleMesh make_polygon_loft(const std::vector<Vec2f> &poly, float top_scale, float height)
+{
+    const int n = int(poly.size());
+    Vec2f c(0.f, 0.f);
+    for (const Vec2f &p : poly)
+        c += p / float(n);
+    std::vector<Vec3f> v;
+    for (const Vec2f &p : poly)
+        v.emplace_back(p.x(), p.y(), 0.f);
+    for (const Vec2f &p : poly) {
+        const Vec2f q = c + (p - c) * top_scale;
+        v.emplace_back(q.x(), q.y(), height);
+    }
+    std::vector<Vec3i> f;
+    for (int i = 1; i + 1 < n; ++ i) {
+        f.emplace_back(0, i + 1, i);
+        f.emplace_back(n, n + i, n + i + 1);
+    }
+    for (int i = 0; i < n; ++ i) {
+        const int a = i, b = (i + 1) % n;
+        f.emplace_back(a, b, b + n);
+        f.emplace_back(a, b + n, a + n);
+    }
+    return Slic3r::TriangleMesh(std::move(v), std::move(f));
+}
+
+static TriangleMesh make_plus(float len, float w, float top_scale, float h)
+{
+    TriangleMesh a = make_polygon_loft({ Vec2f(-len, -w), Vec2f(len, -w), Vec2f(len, w), Vec2f(-len, w) }, top_scale, h);
+    TriangleMesh b = make_polygon_loft({ Vec2f(-w, -len), Vec2f(w, -len), Vec2f(w, len), Vec2f(-w, len) }, top_scale, h);
+    a.merge(b);
+    return a;
+}
+
+SCENARIO("Fork: combine_perimeters atomic fragments", "[Perimeters]")
+{
+    // A plus sign of thin arms: Arachne splits its inner walls into several open fragments per island and
+    // depth. With the option off a wall line can be partly combined; with it on, the fragments of one
+    // (island, depth) group are combined all together or not at all.
+    struct Shape { float w, top_scale; };
+    size_t mixed_off_strict_tolerant = 0;
+    for (const Shape &shape : { Shape{ 1.1f, 1.f }, Shape{ 1.1f, 0.85f }, Shape{ 0.8f, 0.85f } }) {
+        const TriangleMesh plus = make_plus(15.f, shape.w, shape.top_scale, 8.f);
+        for (const char *method : { "loop_strict", "loop_tolerant", "legacy_mask_v3" }) {
+            CAPTURE(shape.w, shape.top_scale, method);
+            const std::string shift = std::string(method) == "legacy_mask_v3" ? "50%" : "20%";
+            const auto off = cp_slice(plus, cp_config(method, 0.1, 2, shift, "arachne"));
+            const auto on  = cp_slice(plus, cp_config(method, 0.1, 2, shift, "arachne", { { "combine_perimeters_atomic_fragments", "1" } }));
+            const FragmentGroups go = fragment_groups(off->print), gn = fragment_groups(on->print);
+            INFO("off: groups " << go.groups << " thick " << go.thick_groups << " mixed " << go.mixed
+                 << "; on: groups " << gn.groups << " thick " << gn.thick_groups << " mixed " << gn.mixed);
+            CHECK(go.groups > 0);
+            CHECK(gn.groups == go.groups);
+            CHECK(gn.mixed == 0);
+            CHECK(count_thick_paths(on->print) <= count_thick_paths(off->print));
+            if (std::string(method) != "legacy_mask_v3")
+                mixed_off_strict_tolerant += go.mixed;
+        }
+    }
+    // Non-vacuous: without the option the whole-loop methods leave partly combined wall lines.
+    CHECK(mixed_off_strict_tolerant > 0);
 }
