@@ -13,6 +13,7 @@
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/PerimeterGenerator.hpp"
 #include "libslic3r/Print.hpp"
@@ -1694,4 +1695,196 @@ SCENARIO("Fork: combine_perimeters atomic fragments", "[Perimeters]")
     }
     // Non-vacuous: without the option the whole-loop methods leave partly combined wall lines.
     CHECK(mixed_off_strict_tolerant > 0);
+}
+
+namespace {
+
+// Role-resolved combine masks of every layer (single object, all regions OR-ed) and the CoolingBuffer flush decision per layer.
+struct CombineLayerInfo {
+    uint8_t sub_mask { 0 };
+    uint8_t top_mask { 0 };
+    bool    is_sub_layer { false };
+    bool    flush { false };
+};
+
+std::vector<CombineLayerInfo> combine_layer_infos(const Print &print)
+{
+    const auto &layers = print.objects().front()->layers();
+    std::vector<CombineLayerInfo> out(layers.size());
+    for (size_t i = 0; i < layers.size(); ++ i) {
+        for (const LayerRegion *lr : layers[i]->regions()) {
+            out[i].sub_mask |= lr->combine_sub_mask();
+            out[i].top_mask |= lr->combine_top_mask();
+        }
+        const CombineFlushDecision d = combine_flush_decision({ layers[i] }, true, false, i + 1 == layers.size());
+        out[i].is_sub_layer = d.is_sub_layer;
+        out[i].flush        = d.flush;
+    }
+    return out;
+}
+
+// Longest run of consecutive buffered sub-layers.
+size_t longest_buffered_run(const std::vector<CombineLayerInfo> &infos)
+{
+    size_t best = 0, cur = 0;
+    for (const CombineLayerInfo &i : infos) {
+        cur = i.is_sub_layer ? cur + 1 : 0;
+        best = std::max(best, cur);
+    }
+    return best;
+}
+
+// Any layer carrying a combined (taller than its own layer height) extrusion of the given role.
+double thick_height_of_role(const Layer &layer, bool infill, ExtrusionRole role)
+{
+    double best = 0.;
+    for (const LayerRegion *lr : layer.regions()) {
+        std::vector<EntityInfo> ents;
+        collect_entities(infill ? static_cast<const ExtrusionEntity*>(&lr->fills()) : &lr->perimeters(), ents);
+        for (const EntityInfo &e : ents)
+            for (const ExtrusionPath *p : e.paths)
+                if (p->role() == role && ! p->polyline.empty() && p->height() > layer.height + 1e-3)
+                    best = std::max(best, double(p->height()));
+    }
+    return best;
+}
+
+bool layer_has_thick_role(const Layer &layer, bool infill, ExtrusionRole role)
+{
+    return thick_height_of_role(layer, infill, role) > 0.;
+}
+
+} // namespace
+
+SCENARIO("Fork: combine masks record the group top and the sub-layers of every role", "[Perimeters][Cooling]")
+{
+    const TriangleMesh cube = box_mesh(20, 20, 6, 0, 0, 0);
+    const auto s = cp_slice(cube, cp_config("loop_tolerant", 0.1, 3, "20%", "classic", { { "infill_every_layers", "2" } }));
+    const auto &layers = s->print.objects().front()->layers();
+    const std::vector<CombineLayerInfo> infos = combine_layer_infos(s->print);
+    constexpr uint8_t F = LayerRegion::CombineRoleFirstInternal, S2 = LayerRegion::CombineRoleSecondInternal, I = LayerRegion::CombineRoleInfill;
+
+    size_t perimeter_tops = 0, infill_tops = 0;
+    for (size_t i = 0; i < layers.size(); ++ i) {
+        CAPTURE(i);
+        // Perimeter masks are exact: the top bit of a role is set iff the layer carries combined paths of that role.
+        const bool top_first  = layer_has_thick_role(*layers[i], false, ExtrusionRole::FirstInternalPerimeter);
+        const bool top_second = layer_has_thick_role(*layers[i], false, ExtrusionRole::SecondInternalPerimeter);
+        CHECK(((infos[i].top_mask & F) != 0) == top_first);
+        CHECK(((infos[i].top_mask & S2) != 0) == top_second);
+        // A top is never a sub-layer of the same role.
+        CHECK((infos[i].top_mask & infos[i].sub_mask & (F | S2 | I)) == 0);
+        // The two booleans mirror the masks.
+        bool any_pm = false, any_im = false;
+        for (const LayerRegion *lr : layers[i]->regions()) {
+            any_pm |= lr->perimeters_moved_to_upper_layer();
+            any_im |= lr->infill_moved_to_upper_layer();
+        }
+        CHECK(any_pm == ((infos[i].sub_mask & (F | S2)) != 0));
+        CHECK(any_im == ((infos[i].sub_mask & I) != 0));
+        // The lower layers of a window of n layers are sub-layers of that role.
+        auto check_window = [&](uint8_t bit, bool infill, ExtrusionRole role) {
+            if (! layer_has_thick_role(*layers[i], infill, role))
+                return;
+            (infill ? infill_tops : perimeter_tops) += 1;
+            CHECK((infos[i].top_mask & bit) != 0);
+            // The window spans the layers whose heights add up to the combined height of the top's paths.
+            const double H = thick_height_of_role(*layers[i], infill, role);
+            double h = layers[i]->height;
+            for (size_t k = 1; k <= i && h < H - 1e-3; ++ k) {
+                h += layers[i - k]->height;
+                CHECK((infos[i - k].sub_mask & bit) != 0);
+            }
+        };
+        check_window(F,  false, ExtrusionRole::FirstInternalPerimeter);
+        check_window(S2, false, ExtrusionRole::SecondInternalPerimeter);
+        check_window(I,  true,  ExtrusionRole::InternalInfill);
+    }
+    CHECK(perimeter_tops >= 20);
+    CHECK(infill_tops >= 10);
+    // Every layer with a sub bit is followed by its group top within the window size.
+    size_t pending[3] = { 0, 0, 0 };
+    const size_t window[3] = { 3, 3, 2 };
+    const uint8_t bits[3] = { F, S2, I };
+    for (size_t i = 0; i < infos.size(); ++ i)
+        for (int r = 0; r < 3; ++ r) {
+            if (infos[i].sub_mask & bits[r])
+                CHECK(++ pending[r] < window[r]);
+            else
+                pending[r] = 0;
+        }
+}
+
+SCENARIO("Fork: combine flush decision keeps every group top and bounds the buffered runs", "[Perimeters][Cooling]")
+{
+    const TriangleMesh cube = box_mesh(20, 20, 6, 0, 0, 0);
+    auto check_tops_flushed = [](const std::vector<CombineLayerInfo> &infos) {
+        for (size_t i = 0; i < infos.size(); ++ i)
+            if (infos[i].top_mask != 0) {
+                CAPTURE(i);
+                CHECK(infos[i].flush);
+                CHECK(! infos[i].is_sub_layer);
+            }
+        CHECK(infos.back().flush);
+    };
+    GIVEN("aligned groups: perimeters 3, infill 3") {
+        const auto s = cp_slice(cube, cp_config("loop_tolerant", 0.1, 3, "20%", "classic", { { "infill_every_layers", "3" } }));
+        const auto infos = combine_layer_infos(s->print);
+        check_tops_flushed(infos);
+        CHECK(longest_buffered_run(infos) == 2);
+        // Flushes occur every 3rd layer through the walls.
+        std::vector<size_t> gaps;
+        size_t last = 0;
+        bool have = false;
+        for (size_t i = 0; i < infos.size(); ++ i)
+            if (infos[i].flush) {
+                if (have)
+                    gaps.push_back(i - last);
+                last = i;
+                have = true;
+            }
+        CHECK(*std::max_element(gaps.begin(), gaps.end()) <= 3);
+        CHECK(std::count(gaps.begin(), gaps.end(), size_t(3)) >= 10);
+    }
+    GIVEN("mismatched groups: perimeters 3, infill 2") {
+        const auto s = cp_slice(cube, cp_config("loop_tolerant", 0.1, 3, "20%", "classic", { { "infill_every_layers", "2" } }));
+        const auto infos = combine_layer_infos(s->print);
+        check_tops_flushed(infos);
+        CHECK(longest_buffered_run(infos) <= 2);
+        // The old OR-of-flags rule chains the groups: it would buffer longer runs.
+        size_t old_cur = 0, old_best = 0;
+        const auto &layers = s->print.objects().front()->layers();
+        for (size_t i = 0; i < layers.size(); ++ i) {
+            bool any = false;
+            for (const LayerRegion *lr : layers[i]->regions())
+                any |= lr->perimeters_moved_to_upper_layer() || lr->infill_moved_to_upper_layer();
+            old_cur = any ? old_cur + 1 : 0;
+            old_best = std::max(old_best, old_cur);
+        }
+        CHECK(old_best > 2);
+    }
+    GIVEN("automatic perimeters (N <= 4) with infill 2") {
+        const Overrides autos = { { "automatic_internal_perimeters_combination", "1" },
+                                  { "automatic_internal_perimeters_combination_max_layer_height", "100%" },
+                                  { "infill_every_layers", "2" } };
+        for (const TriangleMesh &mesh : { cube, make_frustum(8.f, 5.f, 8.f) }) {
+            const auto s = cp_slice(mesh, cp_config("loop_tolerant", 0.1, 4, "20%", "classic", autos));
+            const auto infos = combine_layer_infos(s->print);
+            check_tops_flushed(infos);
+            CHECK(longest_buffered_run(infos) <= 3);
+        }
+    }
+    GIVEN("a layer that is a sub-layer for one role and the top of another is flushed") {
+        // first-internal groups of 2 against second-internal groups of 3: the layers are staggered.
+        DynamicPrintConfig cfg = cp_config("loop_tolerant", 0.1, 2, "20%", "classic", { { "infill_every_layers", "1" } });
+        cfg.set_deserialize_strict("second_internal_perimeter_every_layers", "3");
+        const auto s = cp_slice(cube, cfg);
+        const auto infos = combine_layer_infos(s->print);
+        check_tops_flushed(infos);
+        CHECK(longest_buffered_run(infos) <= 2);
+        bool mixed = false;
+        for (const CombineLayerInfo &i : infos)
+            mixed |= i.top_mask != 0 && i.sub_mask != 0;
+        CHECK(mixed);
+    }
 }
