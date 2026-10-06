@@ -3,6 +3,12 @@
 #include <numeric>
 #include <cmath>
 #include <sstream>
+#include <set>
+#include <tuple>
+#include <chrono>
+#include <limits>
+#include <algorithm>
+#include <catch2/catch_approx.hpp>
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -16,6 +22,7 @@
 #include "test_data.hpp"
 
 using namespace Slic3r;
+using Catch::Approx;
 
 SCENARIO("Perimeter nesting", "[Perimeters]")
 {
@@ -700,25 +707,6 @@ SCENARIO("Fork: perimeter role assignment for new roles in classic mode", "[Peri
     }
 }
 
-SCENARIO("Fork: external_perimeter_every_layers combine smoke test", "[Perimeters]")
-{
-    // Smoke test: external_perimeter_every_layers=2 with layer_height=0.15
-    // (two 0.15mm layers fit under the 0.4mm nozzle cap so combining fires).
-    // Non-empty G-code without crash is the primary correctness criterion.
-    auto config = Slic3r::DynamicPrintConfig::full_print_config_with({
-        { "skirts",                          0 },
-        { "perimeters",                      3 },
-        { "layer_height",                    0.15 },
-        { "external_perimeter_every_layers", 2 },
-        { "cooling",                         "0" },
-        { "first_layer_speed",               "100%" }
-    });
-    std::string gcode = Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config);
-    THEN("G-code produced without crash") {
-        REQUIRE(! gcode.empty());
-    }
-}
-
 SCENARIO("Fork: reverse_internal_perimeters smoke test", "[Perimeters]")
 {
     // Smoke test: reverse_internal_perimeters must slice a simple cube without
@@ -736,11 +724,13 @@ SCENARIO("Fork: reverse_internal_perimeters smoke test", "[Perimeters]")
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fork: combine_perimeters (per-loop rework) tests.
+// ---------------------------------------------------------------------------
+
 // Square frustum (truncated pyramid) narrowing upward with planar side walls. The
 // perimeter centerlines are parallel to the walls, so between adjacent layers they
 // shift horizontally by exactly layer_height * (base_half - top_half) / height.
-// Used to test combine_perimeters_overlap_percent, whose semantics are: a required
-// footprint overlap of X percent accepts a centerline displacement of (1 - X/100) * width.
 static Slic3r::TriangleMesh make_frustum(float base_half, float top_half, float height)
 {
     const float b = base_half, t = top_half, h = height;
@@ -755,82 +745,821 @@ static Slic3r::TriangleMesh make_frustum(float base_half, float top_half, float 
           {3,4,0}, {3,7,4} });          // y = -b wall
 }
 
-SCENARIO("Fork: combine_perimeters_overlap_percent displacement matrix", "[Perimeters]")
+
+namespace {
+
+constexpr double kStadium = 1. - M_PI / 4.;
+const char *const kLoopMethods[] = { "loop_strict", "loop_tolerant", "arc_coverage", "legacy_mask_v3" };
+
+using Overrides = std::vector<std::pair<std::string, std::string>>;
+
+// Base configuration of the combine tests: layer height lh, N layers per combine group for both
+// internal roles, perimeter width 0.45, no skirt, cooling off, light infill.
+DynamicPrintConfig cp_config(const std::string &method, double lh, int n, const std::string &shift = "20%",
+                             const std::string &generator = "classic", const Overrides &extra = {})
 {
-    // Layer height 0.15 (two-layer groups of 0.3 fit under the 0.4 nozzle cap),
-    // perimeter width pinned to 0.4. Combined perimeters emit a path-height tag
-    // of exactly 0.3 (two pinned 0.15 layers); the sloped model also emits a
-    // 0.4 path-height tag from an overhang-flow path, which is NOT a combine.
-    // Match the combined height exactly instead of "anything above the layer
-    // height" so the overhang tag cannot produce a false positive.
-    auto config_with = [](int overlap_percent) {
-        return Slic3r::DynamicPrintConfig::full_print_config_with({
-            { "skirts",                                 0 },
-            { "perimeters",                             3 },
-            { "layer_height",                           0.15 },
-            { "first_layer_height",                     0.15 },
-            { "perimeter_extrusion_width",              0.4 },
-            { "perimeter_generator",                    "classic" },
-            { "first_internal_perimeter_every_layers",  2 },
-            { "second_internal_perimeter_every_layers", 2 },
-            { "combine_perimeters_overlap_percent",    overlap_percent },
-            { "cooling",                                "0" },
-            { "first_layer_speed",                       "100%" }
-        });
-    };
-    auto perimeters_combined = [](const std::string &gcode) {
-        size_t pos = 0;
-        while ((pos = gcode.find(";HEIGHT:", pos)) != std::string::npos) {
-            const double height = std::stod(gcode.substr(pos + 8));
-            if (std::abs(height - 0.3) < 1e-6)
-                return true;
-            ++ pos;
-        }
-        return false;
-    };
+    DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config_with({
+        { "skirts",                                 0 },
+        { "perimeters",                             3 },
+        { "layer_height",                           lh },
+        { "first_layer_height",                     lh },
+        { "perimeter_extrusion_width",              0.45 },
+        { "external_perimeter_extrusion_width",     0.45 },
+        { "perimeter_generator",                    generator },
+        { "first_internal_perimeter_every_layers",  n },
+        { "second_internal_perimeter_every_layers", n },
+        { "combine_perimeters_method",              method },
+        { "combine_perimeters_max_shift",           shift },
+        { "fill_density",                           "5%" },
+        { "cooling",                                "0" },
+        { "first_layer_speed",                      "100%" }
+    });
+    for (const auto &kv : extra)
+        cfg.set_deserialize_strict(kv.first, kv.second);
+    return cfg;
+}
 
-    // Walls shift 0.20 w per layer (shift 0.08 mm, wall angle ~28 degrees), corners
-    // shift sqrt(2) x that = 0.28 w: pass 0% (1.00 w), 50% (0.50 w), 75% (0.25 w —
-    // the tiny corner overshoot falls inside the residual-fragment tolerance);
-    // fail 100% (~0).
-    Slic3r::TriangleMesh shallow_mesh = make_frustum(10.f, 6.8f, 6.f);
-    // Walls shift 0.40 w per layer (shift 0.16 mm, wall angle ~47 degrees, still below
-    // the overhang role-splitting range so the internal paths keep their roles).
-    // Corners shift sqrt(2) x that = 0.57 w, so only the loosest setting passes:
-    // pass 0% (1.00 w); fail 50% (0.50 w), 75% (0.25 w), 100% (~0).
-    Slic3r::TriangleMesh sloped_mesh = make_frustum(10.f, 3.6f, 6.f);
+struct Sliced {
+    Model model;
+    Print print;
+};
 
-    GIVEN("Perfectly vertical walls (cube)") {
-        THEN("combine at 100% — coincident perimeters pass the strictest overlap") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config_with(100))));
+std::unique_ptr<Sliced> cp_slice(const TriangleMesh &mesh, const DynamicPrintConfig &cfg)
+{
+    auto s = std::make_unique<Sliced>();
+    Test::init_print(std::vector<TriangleMesh>{ mesh }, s->print, s->model, cfg);
+    s->print.set_status_silent();
+    s->print.process();
+    return s;
+}
+
+TriangleMesh box_mesh(double sx, double sy, double sz, double x, double y, double z)
+{
+    TriangleMesh m = make_cube(sx, sy, sz);
+    m.translate(float(x - 0.5 * sx), float(y - 0.5 * sy), float(z));
+    return m;
+}
+
+// One extruded entity of a layer: a loop, an open multipath or a single path.
+struct EntityInfo {
+    const ExtrusionEntity               *entity;
+    std::vector<const ExtrusionPath *>   paths;
+    bool                                 closed;
+};
+
+void collect_entities(const ExtrusionEntity *e, std::vector<EntityInfo> &out)
+{
+    if (e->is_collection()) {
+        for (const ExtrusionEntity *c : static_cast<const ExtrusionEntityCollection*>(e)->entities)
+            collect_entities(c, out);
+    } else if (auto *loop = dynamic_cast<const ExtrusionLoop*>(e)) {
+        EntityInfo info{ e, {}, true };
+        for (const ExtrusionPath &p : loop->paths)
+            info.paths.push_back(&p);
+        out.emplace_back(std::move(info));
+    } else if (auto *mp = dynamic_cast<const ExtrusionMultiPath*>(e)) {
+        EntityInfo info{ e, {}, false };
+        for (const ExtrusionPath &p : mp->paths)
+            info.paths.push_back(&p);
+        out.emplace_back(std::move(info));
+    } else if (auto *p = dynamic_cast<const ExtrusionPath*>(e)) {
+        out.push_back({ e, { p }, false });
+    }
+}
+
+std::vector<EntityInfo> layer_entities(const Print &print, size_t layer_idx)
+{
+    std::vector<EntityInfo> out;
+    for (const LayerRegion *lr : print.objects().front()->layers()[layer_idx]->regions())
+        collect_entities(&lr->perimeters(), out);
+    return out;
+}
+
+double layer_height_of(const Print &print, size_t layer_idx) { return print.objects().front()->layers()[layer_idx]->height; }
+size_t layer_count(const Print &print) { return print.objects().front()->layers().size(); }
+
+bool is_thick(const ExtrusionPath &p, double lh) { return p.height() > lh + 1e-3; }
+
+bool is_internal_role(const ExtrusionPath &p)
+{
+    return p.role() == ExtrusionRole::FirstInternalPerimeter || p.role() == ExtrusionRole::SecondInternalPerimeter;
+}
+
+size_t count_thick_paths(const Print &print)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < layer_count(print); ++ i)
+        for (const EntityInfo &e : layer_entities(print, i))
+            for (const ExtrusionPath *p : e.paths)
+                if (is_internal_role(*p) && is_thick(*p, layer_height_of(print, i)))
+                    ++ n;
+    return n;
+}
+
+using Seg  = std::pair<Vec2d, Vec2d>;
+using Segs = std::vector<Seg>;
+
+Vec2d to_mm(const Point &p) { return Vec2d(unscale<double>(p.x()), unscale<double>(p.y())); }
+
+void path_segments(const ExtrusionPath &p, Segs &out)
+{
+    for (size_t i = 1; i < p.polyline.points.size(); ++ i)
+        out.emplace_back(to_mm(p.polyline.points[i - 1]), to_mm(p.polyline.points[i]));
+}
+
+void path_samples(const ExtrusionPath &p, double step, std::vector<Vec2d> &out)
+{
+    double carry = 0.;
+    for (size_t i = 1; i < p.polyline.points.size(); ++ i) {
+        const Vec2d a = to_mm(p.polyline.points[i - 1]), b = to_mm(p.polyline.points[i]);
+        const double len = (b - a).norm();
+        double t = carry;
+        while (t < len) {
+            out.push_back(a + (b - a) * (t / std::max(len, 1e-12)));
+            t += step;
         }
-        THEN("combine at 0%") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ Slic3r::Test::TestMesh::cube_20x20x20 }, config_with(0))));
+        carry = t - len;
+    }
+}
+
+double dist_to_segs(const Vec2d &p, const Segs &segs)
+{
+    double best = std::numeric_limits<double>::max();
+    for (const Seg &s : segs) {
+        const Vec2d d = s.second - s.first;
+        const double l2 = d.squaredNorm();
+        double t = l2 > 0. ? (p - s.first).dot(d) / l2 : 0.;
+        t = std::clamp(t, 0., 1.);
+        best = std::min(best, (p - (s.first + d * t)).norm());
+    }
+    return best;
+}
+
+Segs role_segments(const Print &print, size_t layer_idx, ExtrusionRole role)
+{
+    Segs segs;
+    for (const EntityInfo &e : layer_entities(print, layer_idx))
+        for (const ExtrusionPath *p : e.paths)
+            if (p->role() == role)
+                path_segments(*p, segs);
+    return segs;
+}
+
+struct Protection {
+    size_t lost_samples     { 0 };  // base samples of a role that the combined run no longer prints on the layer
+    size_t lost_exposed     { 0 };  // ... with no counterpart on the (N-1) layers above: P1 violation
+    size_t thick_samples    { 0 };
+    size_t thick_unsupported{ 0 };  // thick samples without a counterpart on a layer below: P2 violation
+};
+
+// Compares a combined run with the same model sliced without combining (every-N = 1).
+Protection cp_protection(const Print &comb, const Print &base, int n_window, double tol)
+{
+    Protection out;
+    REQUIRE(layer_count(comb) == layer_count(base));
+    const size_t nl = layer_count(base);
+    for (ExtrusionRole role : { ExtrusionRole::FirstInternalPerimeter, ExtrusionRole::SecondInternalPerimeter }) {
+        std::vector<Segs> base_segs(nl);
+        for (size_t i = 0; i < nl; ++ i)
+            base_segs[i] = role_segments(base, i, role);
+        for (size_t i = 0; i < nl; ++ i) {
+            const Segs comb_segs = role_segments(comb, i, role);
+            std::vector<Vec2d> samples;
+            for (const EntityInfo &e : layer_entities(base, i))
+                for (const ExtrusionPath *p : e.paths)
+                    if (p->role() == role)
+                        path_samples(*p, 0.5, samples);
+            for (const Vec2d &s : samples) {
+                if (! comb_segs.empty() && dist_to_segs(s, comb_segs) <= 0.02)
+                    continue;
+                ++ out.lost_samples;
+                bool ok = false;
+                for (size_t j = i + 1; j < nl && j < i + size_t(n_window) && ! ok; ++ j)
+                    ok = ! base_segs[j].empty() && dist_to_segs(s, base_segs[j]) <= tol;
+                if (! ok)
+                    ++ out.lost_exposed;
+            }
+            const double lh = layer_height_of(comb, i);
+            for (const EntityInfo &e : layer_entities(comb, i))
+                for (const ExtrusionPath *p : e.paths) {
+                    if (p->role() != role || ! is_thick(*p, lh))
+                        continue;
+                    const int k = int(std::lround(p->height() / lh));
+                    std::vector<Vec2d> ts;
+                    path_samples(*p, 0.5, ts);
+                    for (const Vec2d &s : ts) {
+                        ++ out.thick_samples;
+                        bool ok = true;
+                        for (int m = 1; m < k && ok; ++ m)
+                            ok = size_t(m) <= i && ! base_segs[i - m].empty() && dist_to_segs(s, base_segs[i - m]) <= tol;
+                        if (! ok)
+                            ++ out.thick_unsupported;
+                    }
+                }
         }
     }
-    GIVEN("Walls shifting 0.20 w per layer") {
-        THEN("do not combine at 100%") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(100))));
-        }
-        THEN("combine at 75% (accepted shift 0.25 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(75))));
-        }
-        THEN("combine at 50% (accepted shift 0.50 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ shallow_mesh }, config_with(50))));
+    return out;
+}
+
+// (type, height in microns) of every extruding move of the G-code.
+std::set<std::pair<std::string, int>> gcode_type_heights(const std::string &gcode)
+{
+    std::set<std::pair<std::string, int>> out;
+    std::istringstream ss(gcode);
+    std::string line, type;
+    double height = 0.;
+    while (std::getline(ss, line)) {
+        if (line.compare(0, 6, ";TYPE:") == 0)
+            type = line.substr(6);
+        else if (line.compare(0, 8, ";HEIGHT:") == 0)
+            height = std::stod(line.substr(8));
+        else if (line.compare(0, 2, "G1") == 0) {
+            const size_t e = line.find(" E");
+            if (e != std::string::npos && std::stod(line.substr(e + 2)) > 0.)
+                out.insert({ type, int(std::lround(height * 1000.)) });
         }
     }
-    GIVEN("Walls shifting 0.40 w per layer") {
-        THEN("do not combine at 100%") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(100))));
+    return out;
+}
+
+bool gcode_has_internal_height(const std::string &gcode, int height_um, const char *type = nullptr)
+{
+    for (const auto &th : gcode_type_heights(gcode))
+        if (th.second == height_um && (type ? th.first == type : (th.first == "First internal perimeter" || th.first == "Second internal perimeter")))
+            return true;
+    return false;
+}
+
+bool gcode_has_internal_thicker_than(const std::string &gcode, int height_um, const char *type)
+{
+    for (const auto &th : gcode_type_heights(gcode))
+        if (th.first == type && th.second > height_um)
+            return true;
+    return false;
+}
+
+} // namespace
+
+SCENARIO("Fork: combine_perimeters_max_shift displacement matrix", "[Perimeters]")
+{
+    // Layer height 0.15, N = 2 (groups of 0.3 under the 0.4 nozzle cap), perimeter width 0.45.
+    // New semantics: the shift is the largest lateral displacement of a loop between adjacent layers
+    // (measured along the normal, so box corners do not add a sqrt(2) artefact).
+    //  - shallow frustum: walls shift 0.08 mm per layer = 0.18 w
+    //  - steep frustum:   walls shift 0.16 mm per layer = 0.36 w
+    const TriangleMesh shallow = make_frustum(10.f, 6.8f, 6.f);
+    const TriangleMesh steep   = make_frustum(10.f, 3.6f, 6.f);
+    const TriangleMesh cube    = box_mesh(20, 20, 6, 0, 0, 0);
+
+    for (const char *method : kLoopMethods) {
+        if (std::string(method) == "legacy_mask_v3")
+            continue; // mask based: own expectations below
+        CAPTURE(method);
+        auto combined = [&](const TriangleMesh &mesh, const char *shift) {
+            return gcode_has_internal_height(Test::slice({ mesh }, cp_config(method, 0.15, 2, shift)), 300);
+        };
+        // Perfectly vertical walls: combine at 20% and 100%, and also at shift 0 (coincident loops).
+        CHECK(combined(cube, "20%"));
+        CHECK(combined(cube, "100%"));
+        CHECK(combined(cube, "0%"));
+        // Walls shifting 0.18 w per layer: combine at 20%, 50% and 100%, not at 10%.
+        CHECK(combined(shallow, "20%"));
+        CHECK(combined(shallow, "50%"));
+        CHECK(combined(shallow, "100%"));
+        CHECK(! combined(shallow, "10%"));
+        // Walls shifting 0.36 w per layer: not at 20%; at 40%, 50% and 100% they combine, the box
+        // corner artefact (corner shift sqrt(2) x wall shift) must not block combining.
+        CHECK(! combined(steep, "20%"));
+        CHECK(combined(steep, "40%"));
+        CHECK(combined(steep, "50%"));
+        CHECK(combined(steep, "100%"));
+    }
+
+    // legacy_mask_v3 is mask based: the shift is the mask radius, and (with the legacy tolerance of a
+    // total uncovered length of half a width) the diagonal displacement of a box corner (sqrt(2) x the
+    // wall shift) is not forgiven, so it needs a larger shift than the normal-distance loop methods.
+    {
+        auto combined = [&](const TriangleMesh &mesh, const char *shift) {
+            return gcode_has_internal_height(Test::slice({ mesh }, cp_config("legacy_mask_v3", 0.15, 2, shift)), 300);
+        };
+        CHECK(combined(cube, "20%"));
+        CHECK(combined(cube, "100%"));
+        CHECK(combined(cube, "0%"));
+        CHECK(combined(shallow, "50%"));
+        CHECK(combined(shallow, "100%"));
+        CHECK(! combined(shallow, "10%"));
+        CHECK(! combined(steep, "20%"));
+        CHECK(combined(steep, "100%"));
+    }
+}
+
+SCENARIO("Fork: combine_perimeters all methods are selectable", "[Perimeters]")
+{
+    for (const char *method : { "legacy_mask", "legacy_mask_v2", "legacy_mask_v3", "loop_strict", "loop_tolerant", "arc_coverage" }) {
+        CAPTURE(method);
+        const std::string gcode = Test::slice({ box_mesh(20, 20, 6, 0, 0, 0) }, cp_config(method, 0.15, 2));
+        REQUIRE(! gcode.empty());
+        REQUIRE(gcode_has_internal_height(gcode, 300));
+    }
+}
+
+SCENARIO("Fork: combine_perimeters protection P1 exposed sub-layer loop under a top surface", "[Perimeters]")
+{
+    // A 20x20x3 block with a 10x10x6 block on top: the wide block's perimeters in the ring outside the
+    // narrow block have nothing above them (they sit under a top surface) and must never be voided.
+    TriangleMesh stepped = box_mesh(20, 20, 3.3, 0, 0, 0);
+    stepped.merge(box_mesh(10, 10, 6, 0, 0, 3.0));
+    const auto base = cp_slice(stepped, cp_config("loop_tolerant", 0.15, 1));
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        const auto comb = cp_slice(stepped, cp_config(method, 0.15, 2));
+        const Protection p = cp_protection(comb->print, base->print, 2, 0.11);
+        CHECK(count_thick_paths(comb->print) > 0);
+        CHECK(p.lost_samples > 0);
+        CHECK(p.lost_exposed == 0);
+        CHECK(p.thick_unsupported == 0);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters protection P2 widening wall combines nothing", "[Perimeters]")
+{
+    // Inverted steep frustum: every loop of a layer is 0.36 w outside of the layer below.
+    const TriangleMesh inverted = make_frustum(3.6f, 10.f, 6.f);
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        const auto comb = cp_slice(inverted, cp_config(method, 0.15, 2));
+        REQUIRE(count_thick_paths(comb->print) == 0);
+    }
+    // Same for the shallow widening wall: if anything combines it must be supported from below.
+    const TriangleMesh inverted_shallow = make_frustum(6.8f, 10.f, 6.f);
+    const auto base = cp_slice(inverted_shallow, cp_config("loop_tolerant", 0.15, 1));
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        const auto comb = cp_slice(inverted_shallow, cp_config(method, 0.15, 2));
+        // Point distance to a polyline is sqrt(2) x the normal shift at box corners: tolerance 0.13.
+        const Protection p = cp_protection(comb->print, base->print, 2, 0.13);
+        CHECK(p.lost_exposed == 0);
+        CHECK(p.thick_unsupported == 0);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters protection P3 vanishing inner loop is never voided", "[Perimeters]")
+{
+    // A pointed taper: 6 mm half width to 0.4 mm over 24 mm. Towards the tip the part loses its second
+    // and then its first internal loop; the vanishing loops have no counterpart above.
+    const TriangleMesh taper = make_frustum(6.f, 0.4f, 24.f);
+    const auto base = cp_slice(taper, cp_config("loop_tolerant", 0.15, 1));
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        const auto comb = cp_slice(taper, cp_config(method, 0.15, 2));
+        const Protection p = cp_protection(comb->print, base->print, 2, 0.11);
+        CHECK(count_thick_paths(comb->print) > 0);
+        CHECK(p.lost_exposed == 0);
+        CHECK(p.thick_unsupported == 0);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters protection P4 hole starting mid-window", "[Perimeters]")
+{
+    // A 30x30 plate whose 14x14 hole starts at z = hole_z: four boxes around the hole sit on a base.
+    for (double hole_z : { 1.0, 1.15 }) {
+        CAPTURE(hole_z);
+        auto plate = [&](double /*unused*/) {
+            TriangleMesh m = box_mesh(30, 30, hole_z + 0.1, 0, 0, 0);
+            m.merge(box_mesh(30, 8, 3.3, 0, -11, hole_z));
+            m.merge(box_mesh(30, 8, 3.3, 0,  11, hole_z));
+            m.merge(box_mesh(8, 14, 3.3, -11, 0, hole_z));
+            m.merge(box_mesh(8, 14, 3.3,  11, 0, hole_z));
+            return m;
+        }(0.);
+        for (const char *method : kLoopMethods) {
+            CAPTURE(method);
+            const auto comb = cp_slice(plate, cp_config(method, 0.15, 2));
+            // The outer loops still combine.
+            bool outer_combined = false;
+            // First layer that has a hole loop (a loop whose bbox lies inside the 14 mm hole region).
+            size_t first_hole_layer = size_t(-1);
+            for (size_t i = 0; i < layer_count(comb->print); ++ i) {
+                const double lh = layer_height_of(comb->print, i);
+                for (const EntityInfo &e : layer_entities(comb->print, i)) {
+                    BoundingBox bb;
+                    for (const ExtrusionPath *p : e.paths)
+                        bb.merge(Points(p->polyline.points));
+                    const bool is_hole_loop = bb.defined && unscale<double>(bb.size().x()) < 20. && unscale<double>(bb.size().x()) > 5.;
+                    bool thick = false;
+                    for (const ExtrusionPath *p : e.paths)
+                        thick |= is_internal_role(*p) && is_thick(*p, lh);
+                    if (is_hole_loop) {
+                        if (first_hole_layer == size_t(-1))
+                            first_hole_layer = i;
+                        // Hole loops on their first layer sit over solid material only: never thickened.
+                        if (i == first_hole_layer)
+                            CHECK(! thick);
+                    } else
+                        outer_combined |= thick;
+                }
+            }
+            CHECK(first_hole_layer != size_t(-1));
+            CHECK(outer_combined);
         }
-        THEN("do not combine at 75% (accepted shift 0.25 w)") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(75))));
+    }
+}
+
+SCENARIO("Fork: combine_perimeters protection P5 bridge perimeters are untouched", "[Perimeters]")
+{
+    // A 30 mm slab on two pillars leaves a 20 mm bridge: the slab's first layers have overhang
+    // (bridge-role) perimeter paths in loops that also contain ordinary paths over the pillars.
+    TriangleMesh arch = box_mesh(6, 14, 4.4, -12, 0, 0);
+    arch.merge(box_mesh(6, 14, 4.4, 12, 0, 0));
+    arch.merge(box_mesh(30, 14, 3.3, 0, 0, 4.2));
+    const auto base = cp_slice(arch, cp_config("loop_tolerant", 0.15, 1, "20%", "classic", { { "overhangs", "1" } }));
+
+    struct Sig { size_t paths = 0, mixed_loops = 0; double mm3 = 0., max_height = 0.; };
+    auto signature = [](const Print &print) {
+        Sig sig;
+        for (size_t i = 0; i < layer_count(print); ++ i)
+            for (const EntityInfo &e : layer_entities(print, i)) {
+                size_t bridge = 0;
+                for (const ExtrusionPath *p : e.paths)
+                    if (p->role().is_bridge() && p->role().is_perimeter()) {
+                        ++ bridge;
+                        ++ sig.paths;
+                        sig.mm3 += p->mm3_per_mm() * unscale<double>(p->length());
+                        sig.max_height = std::max<double>(sig.max_height, p->height());
+                    }
+                if (bridge > 0 && bridge < e.paths.size())
+                    ++ sig.mixed_loops;
+            }
+        return sig;
+    };
+    const Sig base_sig = signature(base->print);
+    REQUIRE(base_sig.paths > 0);
+
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        const auto comb = cp_slice(arch, cp_config(method, 0.15, 2, "20%", "classic", { { "overhangs", "1" } }));
+        const Sig sig = signature(comb->print);
+        // Bridge perimeter paths are never voided or thickened.
+        CHECK(sig.paths == base_sig.paths);
+        CHECK(sig.mm3 == Approx(base_sig.mm3).epsilon(1e-6));
+        CHECK(sig.max_height == Approx(base_sig.max_height).epsilon(1e-6));
+        // P4/f: mixed bridge/non-bridge loops are not half-voided, and no path of such a loop is thick.
+        if (std::string(method) != "arc_coverage") {
+            CHECK(sig.mixed_loops == base_sig.mixed_loops);
+            for (size_t i = 0; i < layer_count(comb->print); ++ i)
+                for (const EntityInfo &e : layer_entities(comb->print, i)) {
+                    bool has_bridge = false, has_thick = false;
+                    for (const ExtrusionPath *p : e.paths) {
+                        has_bridge |= p->role().is_bridge();
+                        has_thick  |= is_thick(*p, layer_height_of(comb->print, i)) && ! p->role().is_bridge();
+                    }
+                    CHECK(! (has_bridge && has_thick));
+                }
         }
-        THEN("do not combine at 50% (corner shift 0.57 w exceeds accepted 0.50 w)") {
-            REQUIRE(! perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(50))));
+    }
+}
+
+SCENARIO("Fork: combine_perimeters whole-loop rule", "[Perimeters]")
+{
+    // Loop methods and legacy_mask_v3 never split a loop: all paths of one entity have the same height.
+    const TriangleMesh shallow = make_frustum(10.f, 6.8f, 6.f);
+    const TriangleMesh taper   = make_frustum(8.f, 1.f, 12.f);
+    for (const char *generator : { "classic", "arachne" })
+        for (const char *method : { "loop_strict", "loop_tolerant", "legacy_mask_v3" })
+            for (const TriangleMesh *mesh : { &shallow, &taper }) {
+                CAPTURE(generator, method);
+                const std::string shift = std::string(method) == "legacy_mask_v3" ? "50%" : "20%"; // see the displacement matrix
+                const auto s = cp_slice(*mesh, cp_config(method, 0.15, 2, shift, generator));
+                size_t thick = 0;
+                for (size_t i = 0; i < layer_count(s->print); ++ i)
+                    for (const EntityInfo &e : layer_entities(s->print, i)) {
+                        float h0 = -1.f;
+                        for (const ExtrusionPath *p : e.paths) {
+                            if (! is_internal_role(*p))
+                                continue;
+                            if (h0 < 0.f)
+                                h0 = p->height();
+                            CHECK(p->height() == Approx(h0).margin(1e-4));
+                            thick += is_thick(*p, layer_height_of(s->print, i));
+                        }
+                    }
+                CHECK(thick > 0);
+            }
+}
+
+SCENARIO("Fork: combine_perimeters arc_coverage pieces and bookkeeping", "[Perimeters]")
+{
+    // A sphere: group sizes change with latitude, so arc_coverage produces partial loops.
+    TriangleMesh sphere(its_make_sphere(6., PI / 16.));
+    sphere.translate(0.f, 0.f, 6.f);
+    const double min_arc = 5.;
+    const auto base = cp_slice(sphere, cp_config("loop_tolerant", 0.15, 1));
+    const auto s    = cp_slice(sphere, cp_config("arc_coverage", 0.15, 2, "20%", "classic", { { "combine_perimeters_min_arc", "5" } }));
+    CHECK(count_thick_paths(s->print) > 0);
+
+    for (size_t i = 0; i < layer_count(s->print); ++ i) {
+        const double lh = layer_height_of(s->print, i);
+        for (const EntityInfo &e : layer_entities(s->print, i)) {
+            // Maximal runs of thick internal paths in an entity.
+            const size_t n = e.paths.size();
+            size_t thick_count = 0;
+            for (const ExtrusionPath *p : e.paths)
+                thick_count += is_internal_role(*p) && is_thick(*p, lh);
+            if (thick_count == 0 || thick_count == n)
+                continue;
+            // Start at a non-thick path so closed loops do not wrap around a run.
+            size_t start = 0;
+            while (is_thick(*e.paths[start], lh) && is_internal_role(*e.paths[start]))
+                ++ start;
+            double run = 0.;
+            for (size_t k = 1; k <= n; ++ k) {
+                const ExtrusionPath &p = *e.paths[(start + k) % n];
+                if (is_internal_role(p) && is_thick(p, lh))
+                    run += unscale<double>(p.length());
+                else {
+                    if (run > 0.)
+                        CHECK(run >= min_arc - 1e-3);
+                    run = 0.;
+                }
+            }
+            if (run > 0.)
+                CHECK(run >= min_arc - 1e-3);
         }
-        THEN("combine at 0% (accepted shift 1.00 w)") {
-            REQUIRE(perimeters_combined(Slic3r::Test::slice({ sloped_mesh }, config_with(0))));
+    }
+    // Entity bookkeeping: a layer that lost entities stores the pre-combine entity count.
+    for (size_t i = 0; i < layer_count(s->print); ++ i) {
+        size_t base_entities = 0, now_entities = 0;
+        for (const LayerRegion *lr : base->print.objects().front()->layers()[i]->regions())
+            for (const ExtrusionEntity *ee : lr->perimeters().entities)
+                base_entities += ee->is_collection() ? static_cast<const ExtrusionEntityCollection*>(ee)->entities.size() : 1;
+        int pre = -1;
+        for (const LayerRegion *lr : s->print.objects().front()->layers()[i]->regions()) {
+            pre = std::max(pre, lr->perimeter_entity_count_pre_combine());
+            for (const ExtrusionEntity *ee : lr->perimeters().entities)
+                now_entities += ee->is_collection() ? static_cast<const ExtrusionEntityCollection*>(ee)->entities.size() : 1;
+        }
+        if (now_entities < base_entities) {
+            CHECK(pre >= 0);
+            CHECK(size_t(pre) == base_entities);
+        }
+        // A stashed count always equals the entity count the layer had before combining (the layer
+        // may later hold MORE entities than that: arc_coverage splits loops into pieces).
+        if (pre >= 0)
+            CHECK(size_t(pre) == base_entities);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters flow of combined paths", "[Perimeters][Flow]")
+{
+    // Volume conservation per path: mm3_per_mm == H * s_p with s_p the spacing of the thin path, the
+    // combined width is at least its height, and per-path widths of Arachne walls are preserved.
+    const TriangleMesh taper = make_frustum(8.f, 1.f, 12.f);
+    for (const char *generator : { "classic", "arachne" })
+        for (const char *method : { "loop_strict", "loop_tolerant", "legacy_mask_v3" }) {
+            CAPTURE(generator, method);
+            const std::string shift = std::string(method) == "legacy_mask_v3" ? "50%" : "20%";
+            const auto base = cp_slice(taper, cp_config(method, 0.15, 1, shift, generator));
+            const auto comb = cp_slice(taper, cp_config(method, 0.15, 2, shift, generator));
+            REQUIRE(layer_count(base->print) == layer_count(comb->print));
+            size_t thick = 0;
+            std::set<int> thin_widths;
+            for (size_t i = 0; i < layer_count(comb->print); ++ i) {
+                const double lh = layer_height_of(comb->print, i);
+                const auto ce = layer_entities(comb->print, i);
+                const auto be = layer_entities(base->print, i);
+                bool layer_has_thick = false;
+                for (const EntityInfo &e : ce)
+                    for (const ExtrusionPath *p : e.paths)
+                        layer_has_thick |= is_thick(*p, lh);
+                for (const EntityInfo &e : be)
+                    for (const ExtrusionPath *p : e.paths)
+                        thin_widths.insert(int(std::lround(p->width() * 1000.)));
+                if (! layer_has_thick)
+                    continue;
+                // A top layer keeps the structure of an uncombined layer.
+                REQUIRE(ce.size() == be.size());
+                for (size_t k = 0; k < ce.size(); ++ k) {
+                    REQUIRE(ce[k].paths.size() == be[k].paths.size());
+                    for (size_t m = 0; m < ce[k].paths.size(); ++ m) {
+                        const ExtrusionPath &c = *ce[k].paths[m], &b = *be[k].paths[m];
+                        if (! is_thick(c, lh)) {
+                            CHECK(c.width() == Approx(b.width()).margin(1e-5));
+                            continue;
+                        }
+                        ++ thick;
+                        const double H = c.height();
+                        // Volume conservation: area = H * s_p, s_p of the thin path.
+                        const double s_p = double(b.width()) - double(b.height()) * kStadium;
+                        CHECK(c.mm3_per_mm() == Approx(H * s_p).margin(1e-6));
+                        CHECK(c.mm3_per_mm() == Approx(H * (double(c.width()) - H * kStadium)).margin(1e-6));
+                        CHECK(c.width() >= c.height());
+                        // The path keeps its own width (plus the merge growth), not a loop-wide one.
+                        CHECK(c.width() == Approx(b.width() + (H - b.height()) * kStadium).margin(1e-5));
+                    }
+                }
+            }
+            CHECK(thick > 0);
+            if (std::string(generator) == "arachne")
+                // The Arachne taper does produce paths of different widths.
+                CHECK(thin_widths.size() > 1);
+        }
+}
+
+SCENARIO("Fork: combine_perimeters legacy_mask_v2 flow", "[Perimeters][Flow]")
+{
+    // legacy_mask_v2 has the legacy acceptance test but the per-path, volume-conserving flow;
+    // legacy_mask overwrites every combined path with the nominal width.
+    const TriangleMesh taper = make_frustum(8.f, 1.f, 12.f);
+    for (const char *generator : { "classic", "arachne" }) {
+        CAPTURE(generator);
+        const auto base = cp_slice(taper, cp_config("legacy_mask_v2", 0.15, 1, "50%", generator));
+        const auto v1   = cp_slice(taper, cp_config("legacy_mask",    0.15, 2, "50%", generator));
+        const auto v2   = cp_slice(taper, cp_config("legacy_mask_v2", 0.15, 2, "50%", generator));
+        REQUIRE(layer_count(base->print) == layer_count(v2->print));
+        REQUIRE(layer_count(v1->print) == layer_count(v2->print));
+        size_t thick = 0;
+        std::set<int> v1_widths, v2_widths;
+        for (size_t i = 0; i < layer_count(v2->print); ++ i) {
+            const double lh = layer_height_of(v2->print, i);
+            const auto e1 = layer_entities(v1->print, i);
+            const auto e2 = layer_entities(v2->print, i);
+            const auto be = layer_entities(base->print, i);
+            // Same accepted set: the same number of combined paths and of entities per layer.
+            size_t n1 = 0, n2 = 0;
+            for (const EntityInfo &e : e1)
+                for (const ExtrusionPath *p : e.paths)
+                    if (is_thick(*p, lh)) { ++ n1; v1_widths.insert(int(std::lround(p->width() * 1000.))); }
+            for (const EntityInfo &e : e2)
+                for (const ExtrusionPath *p : e.paths)
+                    if (is_thick(*p, lh)) { ++ n2; v2_widths.insert(int(std::lround(p->width() * 1000.))); }
+            CHECK(n1 == n2);
+            REQUIRE(e1.size() == e2.size());
+            if (n2 == 0)
+                continue;
+            REQUIRE(e2.size() == be.size());
+            for (size_t k = 0; k < e2.size(); ++ k) {
+                REQUIRE(e2[k].paths.size() == be[k].paths.size());
+                for (size_t m = 0; m < e2[k].paths.size(); ++ m) {
+                    const ExtrusionPath &c = *e2[k].paths[m], &b = *be[k].paths[m];
+                    if (! is_thick(c, lh))
+                        continue;
+                    ++ thick;
+                    const double H = c.height();
+                    const double s_p = double(b.width()) - double(b.height()) * kStadium;
+                    CHECK(c.mm3_per_mm() == Approx(H * s_p).margin(1e-6));
+                    CHECK(c.width() >= c.height());
+                }
+            }
+        }
+        CHECK(thick > 0);
+        // legacy_mask: every combined path shares the nominal width; v2 keeps per-path widths.
+        CHECK(v1_widths.size() == 1);
+        if (std::string(generator) == "arachne")
+            CHECK(v2_widths.size() > 1);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters narrow perimeter width cap", "[Perimeters][Flow]")
+{
+    // w = 0.30, h = 0.1, N = 4: the merged bead (H = 0.4) would be narrower than tall. Nothing
+    // may combine and nothing may throw.
+    const TriangleMesh cube = box_mesh(20, 20, 4, 0, 0, 0);
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        auto cfg = cp_config(method, 0.1, 4, "20%", "classic",
+            { { "perimeter_extrusion_width", "0.30" }, { "external_perimeter_extrusion_width", "0.30" } });
+        std::unique_ptr<Sliced> s;
+        REQUIRE_NOTHROW(s = cp_slice(cube, cfg));
+        for (size_t i = 0; i < layer_count(s->print); ++ i)
+            for (const EntityInfo &e : layer_entities(s->print, i))
+                for (const ExtrusionPath *p : e.paths) {
+                    CHECK(p->height() < 0.4f - 1e-3f);
+                    CHECK(p->width() >= p->height());
+                }
+    }
+}
+
+SCENARIO("Fork: combine_perimeters config and legacy profiles", "[Perimeters][Config]")
+{
+    auto load = [](const std::string &ini) {
+        DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
+        REQUIRE_NOTHROW(cfg.load_from_ini_string(ini, ForwardCompatibilitySubstitutionRule::Disable));
+        return cfg;
+    };
+    GIVEN("old overlap percentage") {
+        const DynamicPrintConfig cfg = load("combine_perimeters_overlap_percent = 75\n");
+        REQUIRE(! cfg.has("combine_perimeters_overlap_percent"));
+        const auto *shift = cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift");
+        REQUIRE(shift != nullptr);
+        CHECK(shift->percent);
+        CHECK(shift->value == Approx(20.));
+    }
+    GIVEN("old automatic key") {
+        const DynamicPrintConfig on  = load("automatic_perimeter_combination = 1\n");
+        const DynamicPrintConfig off = load("automatic_perimeter_combination = 0\n");
+        CHECK(! on.has("automatic_perimeter_combination"));
+        CHECK(on.opt_bool("automatic_internal_perimeters_combination"));
+        CHECK(! off.opt_bool("automatic_internal_perimeters_combination"));
+    }
+    GIVEN("removed external_perimeter_every_layers") {
+        const DynamicPrintConfig cfg = load("external_perimeter_every_layers = 2\nperimeters = 4\n");
+        CHECK(! cfg.has("external_perimeter_every_layers"));
+        CHECK(cfg.opt_int("perimeters") == 4);
+    }
+    GIVEN("the method enum") {
+        CHECK(FullPrintConfig().combine_perimeters_method.value == cpmLoopTolerant);
+        CHECK(DynamicPrintConfig::full_print_config().opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == cpmLoopTolerant);
+        const std::pair<const char *, CombinePerimetersMethod> values[] = {
+            { "legacy_mask", cpmLegacyMask }, { "legacy_mask_v2", cpmLegacyMaskV2 }, { "legacy_mask_v3", cpmLegacyMaskV3 },
+            { "loop_strict", cpmLoopStrict },
+            { "loop_tolerant", cpmLoopTolerant }, { "arc_coverage", cpmArcCoverage } };
+        for (const auto &kv : values) {
+            DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
+            cfg.set_deserialize_strict("combine_perimeters_method", kv.first);
+            CHECK(cfg.opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == kv.second);
+            CHECK(cfg.opt_serialize("combine_perimeters_method") == kv.first);
+        }
+    }
+    GIVEN("the max shift value") {
+        DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
+        CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->percent);
+        CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->value == Approx(20.));
+        cfg.set_deserialize_strict("combine_perimeters_max_shift", "25%");
+        CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->percent);
+        CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->value == Approx(25.));
+        cfg.set_deserialize_strict("combine_perimeters_max_shift", "0.1");
+        CHECK(! cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->percent);
+        CHECK(cfg.option<ConfigOptionFloatOrPercent>("combine_perimeters_max_shift")->value == Approx(0.1));
+    }
+}
+
+SCENARIO("Fork: combine_perimeters automatic internal perimeters combination", "[Perimeters]")
+{
+    const TriangleMesh cube = box_mesh(20, 20, 6, 0, 0, 0);
+    const Overrides autos = { { "automatic_internal_perimeters_combination", "1" },
+                              { "automatic_internal_perimeters_combination_max_layer_height", "100%" } };
+    GIVEN("auto on, N = 4 for both roles, 0.1 mm layers") {
+        const std::string gcode = Test::slice({ cube }, cp_config("loop_tolerant", 0.1, 4, "20%", "classic", autos));
+        THEN("walls combine in groups of 4 (H = 0.4 = nozzle) for both roles") {
+            CHECK(gcode_has_internal_height(gcode, 400, "First internal perimeter"));
+            CHECK(gcode_has_internal_height(gcode, 400, "Second internal perimeter"));
+            CHECK(! gcode_has_internal_thicker_than(gcode, 400, "First internal perimeter"));
+            CHECK(! gcode_has_internal_thicker_than(gcode, 400, "Second internal perimeter"));
+        }
+    }
+    GIVEN("auto on, second internal every-N = 1 (concept 1)") {
+        DynamicPrintConfig cfg = cp_config("loop_tolerant", 0.1, 4, "20%", "classic", autos);
+        cfg.set_deserialize_strict("second_internal_perimeter_every_layers", "1");
+        const std::string gcode = Test::slice({ cube }, cfg);
+        THEN("only the first internal role combines") {
+            CHECK(gcode_has_internal_thicker_than(gcode, 150, "First internal perimeter"));
+            CHECK(! gcode_has_internal_thicker_than(gcode, 150, "Second internal perimeter"));
+        }
+    }
+    GIVEN("a deterministic driver") {
+        const TriangleMesh taper = make_frustum(8.f, 5.f, 8.f);
+        auto signature = [&](const Print &print) {
+            std::vector<std::tuple<size_t, int, int, int64_t>> sig;
+            for (size_t i = 0; i < layer_count(print); ++ i)
+                for (const EntityInfo &e : layer_entities(print, i))
+                    for (const ExtrusionPath *p : e.paths)
+                        sig.emplace_back(i, (p->role().is_second_internal_perimeter() ? 2 : p->role().is_first_internal_perimeter() ? 1 : 0), int(std::lround(p->height() * 1000.)), int64_t(p->length()));
+            return sig;
+        };
+        const auto a = cp_slice(taper, cp_config("loop_tolerant", 0.1, 4, "20%", "classic", autos));
+        const auto b = cp_slice(taper, cp_config("loop_tolerant", 0.1, 4, "20%", "classic", autos));
+        CHECK(signature(a->print) == signature(b->print));
+        CHECK(count_thick_paths(a->print) > 0);
+    }
+}
+
+SCENARIO("Fork: combine_perimeters performance sanity", "[Perimeters]")
+{
+    // A 50 mm tall cube at 0.1 mm layers with combining enabled finishes within a generous guard.
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto s  = cp_slice(box_mesh(20, 20, 50, 0, 0, 0), cp_config("loop_tolerant", 0.1, 4, "20%", "classic",
+        { { "fill_density", "0%" }, { "top_solid_layers", "1" }, { "bottom_solid_layers", "1" } }));
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(layer_count(s->print) == 500);
+    CHECK(count_thick_paths(s->print) > 0);
+    CHECK(secs < 60.);
+}
+
+SCENARIO("Fork: combine_perimeters frustum wall angles at 0.1 mm layers", "[Perimeters]")
+{
+    // Wall angle from vertical: the horizontal shift per 0.1 mm layer is 0.1 * tan(angle); with a 20%
+    // shift (0.09 mm) N = 2 groups combine up to about 42 degrees and not at 45 degrees.
+    for (const char *method : kLoopMethods) {
+        CAPTURE(method);
+        for (double angle : { 10., 20., 30., 45. }) {
+            CAPTURE(angle);
+            const double height = 4.;
+            const float  top    = float(14. - height * std::tan(angle * PI / 180.));
+            const std::string gcode = Test::slice({ make_frustum(14.f, top, float(height)) }, cp_config(method, 0.1, 2));
+            if (angle < 40.)
+                CHECK(gcode_has_internal_height(gcode, 200));
+            else
+                CHECK(! gcode_has_internal_height(gcode, 200));
         }
     }
 }
