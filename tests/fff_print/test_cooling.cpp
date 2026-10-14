@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <numeric>
 #include <sstream>
 
@@ -412,6 +413,87 @@ SCENARIO("Fork: saturating slowdown must never go below min_print_speed", "[Cool
                 INFO("feedrate " << f << " mm/min");
                 REQUIRE(f >= 899);
             }
+        }
+    }
+}
+
+namespace {
+// All "M106 S<value>" values of a G-code text, in order.
+std::vector<int> fan_values(const std::string &gcode)
+{
+    std::vector<int> out;
+    std::istringstream in(gcode);
+    std::string line;
+    while (std::getline(in, line))
+        if (line.compare(0, 6, "M106 S") == 0)
+            out.push_back(std::atoi(line.c_str() + 6));
+    return out;
+}
+// The fan value (0..255, truncated as GCodeWriter::set_fan does) of the interpolation between max_fan_speed and min_fan_speed for a layer time.
+int expected_fan_255(double layer_time, double slowdown_below, double fan_below, double min_fan, double max_fan)
+{
+    const double t   = (layer_time - slowdown_below) / (fan_below - slowdown_below);
+    const int    pct = int(std::floor(t * min_fan + (1. - t) * max_fan) + 0.5);
+    return int(pct / 100. * 255.);
+}
+}
+
+SCENARIO("Fan group: levels of one print_z share one fan value", "[Cooling]")
+{
+    // slowdown_below_layer_time is below every chunk time, so the slowdown does not interfere
+    // and the fan is the pure interpolation between max_fan_speed and min_fan_speed.
+    auto config = DynamicPrintConfig::full_print_config_with({
+        { "cooling",                   "1" },
+        { "fan_always_on",             "0" },
+        { "min_fan_speed",             "40" },
+        { "max_fan_speed",             "100" },
+        { "slowdown_below_layer_time", "1" },
+        { "fan_below_layer_time",      "60" },
+        { "min_print_speed",           "10" },
+        { "disable_fan_first_layers",  "0" },
+        { "full_fan_speed_layer",      "0" },
+    });
+    // 2 s lower level chunks, a 20 s top chunk.
+    // Every chunk starts with ;LAYER_CHANGE and ends with an M204 line like the real layer G-code, so that
+    // the chunk boundary lies in a raw-text gap, where the fan is emitted.
+    const std::string lower1 = ";LAYER_CHANGE\nG1 F3000;_EXTRUDE_SET_SPEED\nG1 X100 E1\n;_EXTRUDE_END\nM204 P3000\n";
+    const std::string lower2 = ";LAYER_CHANGE\nG1 F3000;_EXTRUDE_SET_SPEED\nG1 X0 E1\n;_EXTRUDE_END\nM204 P3000\n";
+    std::string top = ";LAYER_CHANGE\nG1 F3000;_EXTRUDE_SET_SPEED\n";
+    for (int i = 0; i < 10; ++ i)
+        top += (i % 2 == 0) ? "G1 X100 E1\n" : "G1 X0 E1\n";
+    top += ";_EXTRUDE_END\nM204 P3000\n";
+    const int fan_lower = expected_fan_255(2.,  1., 60., 40., 100.);
+    const int fan_top   = expected_fan_255(20., 1., 60., 40., 100.);
+    const int fan_group = expected_fan_255(24., 1., 60., 40., 100.);
+    REQUIRE(fan_lower != fan_top);
+    REQUIRE(fan_group != fan_top);
+
+    auto run = [&](size_t g1, size_t g2, size_t g3) {
+        GCodeGenerator gcodegen;
+        auto buffer = make_cooling_buffer(gcodegen, config);
+        std::string out;
+        out += buffer->process_layer(lower1, 3, false, true, g1);
+        out += buffer->process_layer(lower2, 3, false, true, g2);
+        out += buffer->process_layer(top,    3, true,  false, g3);
+        return fan_values(out);
+    };
+
+    GIVEN("chunks without a fan group") {
+        const std::vector<int> fans = run(0, 0, 0);
+        THEN("every chunk has the fan of its own time (unchanged behavior)") {
+            REQUIRE(fans == std::vector<int>{ fan_lower, fan_top });
+        }
+    }
+    GIVEN("two lower chunks and the top chunk tagged with one fan group") {
+        const std::vector<int> fans = run(7, 7, 7);
+        THEN("the whole group has the single fan value of the summed time") {
+            REQUIRE(fans == std::vector<int>{ fan_group });
+        }
+    }
+    GIVEN("the lower chunks and the top chunk in different fan groups") {
+        const std::vector<int> fans = run(7, 7, 8);
+        THEN("each group has the fan of its own total") {
+            REQUIRE(fans == std::vector<int>{ expected_fan_255(4., 1., 60., 40., 100.), fan_top });
         }
     }
 }

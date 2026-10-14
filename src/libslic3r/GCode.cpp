@@ -1741,15 +1741,23 @@ void GCodeGenerator::process_layers(
                 const std::pair<coordf_t, ObjectsLayerToPrint> &layer = layers_to_print[item.layer_idx];
                 const LayerTools& layer_tools = tool_ordering.tools_for_layer(layer.first);
                 print.throw_if_canceled();
-                if (item.level < item.top_level)
-                    return this->process_sub_level(print, layer.second, layer_tools,
+                // The levels of one print_z (external perimeter resolution) share a fan group: the cooling buffer
+                // derives their fan from the group's total time. 0 = no group (a plain layer).
+                const size_t fan_group = item.top_level > 0 ? item.layer_idx + 1 : 0;
+                if (item.level < item.top_level) {
+                    LayerResult result = this->process_sub_level(print, layer.second, layer_tools,
                         GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache },
                         item.level, &print_object_instances_ordering, size_t(-1));
+                    result.cooling_fan_group = fan_group;
+                    return result;
+                }
                 if (m_wipe_tower && layer_tools.has_wipe_tower)
                     m_wipe_tower->next_layer();
-                return this->process_layer(print, layer.second, layer_tools, 
+                LayerResult result = this->process_layer(print, layer.second, layer_tools, 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache }, 
                     &layer == &layers_to_print.back(), &print_object_instances_ordering, size_t(-1));
+                result.cooling_fan_group = fan_group;
+                return result;
             }
         });
     // The pipeline is variable: The vase mode filter is optional.
@@ -1759,7 +1767,7 @@ void GCodeGenerator::process_layers(
                 return in;
             spiral_vase->enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false};
+            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false, in.cooling_fan_group};
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -1770,7 +1778,7 @@ void GCodeGenerator::process_layers(
              if (in.nop_layer_result)
                 return in.gcode;
 
-             return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer);
+             return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, in.cooling_fan_group);
         });
     const auto find_replace = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [find_replace = this->m_find_replace.get()](std::string s) -> std::string {
@@ -1853,13 +1861,20 @@ void GCodeGenerator::process_layers(
                 const LevelItem &item = items[in.item_idx];
                 ObjectLayerToPrint &layer = layers_to_print[item.layer_idx];
                 print.throw_if_canceled();
-                if (item.level < item.top_level)
-                    return this->process_sub_level(print, { layer }, tool_ordering.tools_for_layer(layer.print_z()),
+                // Levels of one print_z share a fan group (see the non-sequential pipeline).
+                const size_t fan_group = item.top_level > 0 ? item.layer_idx + 1 : 0;
+                if (item.level < item.top_level) {
+                    LayerResult result = this->process_sub_level(print, { layer }, tool_ordering.tools_for_layer(layer.print_z()),
                         GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache },
                         item.level, nullptr, single_object_idx);
-                return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
+                    result.cooling_fan_group = fan_group;
+                    return result;
+                }
+                LayerResult result = this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
                     GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache }, 
                     &layer == &layers_to_print.back(), nullptr, single_object_idx);
+                result.cooling_fan_group = fan_group;
+                return result;
             }
         });
     // The pipeline is variable: The vase mode filter is optional.
@@ -1869,7 +1884,7 @@ void GCodeGenerator::process_layers(
                 return in;
             spiral_vase->enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false};
+            return { spiral_vase->process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, false, in.cooling_fan_group};
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -1879,7 +1894,7 @@ void GCodeGenerator::process_layers(
         [cooling_buffer = this->m_cooling_buffer.get()](LayerResult in)->std::string {
             if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer);
+            return cooling_buffer->process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_buffer_combine_sub_layer, in.cooling_fan_group);
         });
     const auto find_replace = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [find_replace = this->m_find_replace.get()](std::string s) -> std::string {

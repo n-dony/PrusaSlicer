@@ -42,9 +42,9 @@ public:
     CoolingBuffer(GCodeGenerator &gcodegen);
     void        reset(const Vec3d &position);
     void        set_current_extruder(unsigned int extruder_id) { m_current_extruder = extruder_id; }
-    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer = false);
-    std::string process_layer(const std::string &gcode, size_t layer_id, bool flush, bool is_combine_sub_layer = false)
-        { return this->process_layer(std::string(gcode), layer_id, flush, is_combine_sub_layer); }
+    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer = false, size_t fan_group = 0);
+    std::string process_layer(const std::string &gcode, size_t layer_id, bool flush, bool is_combine_sub_layer = false, size_t fan_group = 0)
+        { return this->process_layer(std::string(gcode), layer_id, flush, is_combine_sub_layer, fan_group); }
 
 private:
 	CoolingBuffer& operator=(const CoolingBuffer&) = delete;
@@ -66,6 +66,9 @@ private:
     // never the combine group's total.
     std::vector<size_t>         m_layer_starts;
     std::vector<size_t>         m_layer_ids;
+    // Fan group of each buffered chunk (parallel to m_layer_starts): chunks sharing a non-zero id (the levels
+    // of one print_z, external perimeter resolution) get one fan value from the sum of their times. 0 = none.
+    std::vector<size_t>         m_layer_fan_groups;
     // Internal data.
     std::vector<char>           m_axis;
     enum AxisIdx : int {

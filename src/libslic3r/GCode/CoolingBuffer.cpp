@@ -564,13 +564,14 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, bool is_combine_sub_layer, size_t fan_group)
 {
     // Record where this physical layer's chunk starts and its id, so the flush can emit
     // a per-layer fan level: the fan follows each layer's own print time, never the
     // combine group's total.
     m_layer_starts.push_back(m_gcode.size());
     m_layer_ids.push_back(layer_id);
+    m_layer_fan_groups.push_back(fan_group);
 
     // Cache the input G-code.
     if (m_gcode.empty())
@@ -711,6 +712,7 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
         m_sub_layers_end = 0;
         m_layer_starts.clear();
         m_layer_ids.clear();
+        m_layer_fan_groups.clear();
     }
     return out;
 }
@@ -1297,6 +1299,17 @@ std::string CoolingBuffer::apply_layer_cooldown(
             }
         if (fan_layer_ids.size() != m_layer_starts.size())
             fan_layer_ids.assign(m_layer_starts.size(), layer_id);
+    }
+    // Fan groups (levels of one print_z): every chunk of a group takes the group's total post-slowdown time,
+    // so the whole print_z gets one fan value. Chunks without a group keep their own time.
+    if (m_layer_fan_groups.size() == m_layer_starts.size()) {
+        std::unordered_map<size_t, float> group_times;
+        for (size_t i = 0; i < layer_times.size(); ++ i)
+            if (m_layer_fan_groups[i] != 0)
+                group_times[m_layer_fan_groups[i]] += layer_times[i];
+        for (size_t i = 0; i < layer_times.size(); ++ i)
+            if (m_layer_fan_groups[i] != 0)
+                layer_times[i] = group_times[m_layer_fan_groups[i]];
     }
     auto layer_time_at = [&layer_times, this](size_t offset) -> float {
         if (m_layer_starts.empty())

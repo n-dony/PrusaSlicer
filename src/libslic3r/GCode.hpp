@@ -93,6 +93,9 @@ struct LayerResult {
     // Is indicating if this LayerResult should be processed, or it is just inserted artificial LayerResult.
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
+    // External perimeter resolution: id shared by all levels (lower levels + top) of one print_z, 0 = none.
+    // CoolingBuffer computes one fan value per group from the sum of the levels' times.
+    size_t      cooling_fan_group { 0 };
 
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, false, true}; }
 };
