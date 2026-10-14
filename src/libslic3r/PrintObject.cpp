@@ -267,6 +267,8 @@ void PrintObject::make_perimeters()
     }
 
     BOOST_LOG_TRIVIAL(debug) << "Generating perimeters in parallel - start";
+    external_resolution_stats_reset(this);
+    const auto perimeter_stage_start = std::chrono::steady_clock::now();
     tbb::parallel_for(
         tbb::blocked_range<size_t>(0, m_layers.size()),
         [this](const tbb::blocked_range<size_t>& range) {
@@ -279,6 +281,7 @@ void PrintObject::make_perimeters()
     );
     m_print->throw_if_canceled();
     BOOST_LOG_TRIVIAL(debug) << "Generating perimeters in parallel - end";
+    external_resolution_stats_log(this, std::chrono::duration<double>(std::chrono::steady_clock::now() - perimeter_stage_start).count());
 
     this->combine_perimeters();
     m_print->throw_if_canceled();
@@ -779,6 +782,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "raft_layers"
             || opt_key == "raft_contact_distance"
             || opt_key == "slice_closing_radius"
+            || opt_key == "external_perimeter_resolution"
             || opt_key == "slicing_mode"
             || opt_key == "interlocking_beam"
             || opt_key == "interlocking_orientation"
@@ -909,6 +913,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "overhangs"
             || opt_key == "thin_walls"
             || opt_key == "thick_bridges") {
+            // The per-layer external resolution factor depends on the minimum layer height of the perimeter extruder.
+            if (opt_key == "perimeter_extruder" && m_config.external_perimeter_resolution.value > 1)
+                steps.emplace_back(posSlice);
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "two_pass_bridge_scope" || opt_key == "bridge_anchor_length") {

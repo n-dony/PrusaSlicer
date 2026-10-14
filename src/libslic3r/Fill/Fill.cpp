@@ -557,8 +557,10 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         // split, which preserves the width there.
         // Two-pass is skipped (single-pass fallback) when half the layer height is below the
         // minimum layer height of the extruder printing this fill.
+        // The two-pass bridge is forced off on layers printing the external perimeter in k > 1 passes (external perimeter resolution, MVP).
         const bool two_pass_ok =
             layerm.layer()->object()->config().two_pass_bridge_scope.value != TwoPassBridgeScope::Disabled &&
+            layerm.layer()->external_resolution() <= 1 &&
             two_pass_height_allowed(layerm.layer()->object()->print()->config(), surface_fill.params.extruder, params.layer_height);
         const bool two_pass_round_bridge =
             ! params.use_arachne &&

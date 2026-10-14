@@ -4,6 +4,12 @@
 ///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
 ///|/
 #include <boost/log/trivial.hpp>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <limits>
+#include <mutex>
 #include <algorithm>
 #include <string>
 #include <map>
@@ -85,6 +91,182 @@ void LayerRegion::slices_to_fill_surfaces_clipped()
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// External perimeter resolution: statistics, debug dumps and the high-definition external runs.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+struct ExtResStats {
+    std::atomic<size_t> islands_total { 0 };
+    std::atomic<size_t> islands_processed { 0 };
+    std::atomic<size_t> fallback_mapping { 0 };        // not exactly one sub-expolygon maps to the island (for some plane)
+    std::atomic<size_t> fallback_holes { 0 };          // hole count differs
+    std::atomic<size_t> fallback_counts { 0 };         // external entity / closed loop / clockwise loop counts differ
+    std::atomic<size_t> fallback_no_externals { 0 };   // the normal run produced no external loop
+    std::atomic<size_t> fallback_layer_unsupported { 0 };   // multi-region layers, PerimeterRegions
+    std::atomic<size_t> sub_runs { 0 };
+};
+
+std::mutex                                       g_ext_res_mutex;
+std::map<const PrintObject*, ExtResStats>        g_ext_res_stats;
+
+ExtResStats& ext_res_stats(const PrintObject *object)
+{
+    std::lock_guard<std::mutex> lock(g_ext_res_mutex);
+    return g_ext_res_stats[object];     // std::map: references stay valid
+}
+
+const char* ext_res_dump_dir()
+{
+    static const char *dir = std::getenv("SLIC3R_DUMP_EXTERNAL_SUBPASSES");
+    return dir != nullptr && *dir != 0 ? dir : nullptr;
+}
+
+bool is_external_entity(const ExtrusionEntity *entity)
+{
+    if (auto *loop = dynamic_cast<const ExtrusionLoop*>(entity))
+        return ! loop->paths.empty() && loop->paths.front().attributes().perimeter_index.has_value() && *loop->paths.front().attributes().perimeter_index == 0;
+    if (auto *mp = dynamic_cast<const ExtrusionMultiPath*>(entity))
+        return ! mp->paths.empty() && mp->paths.front().attributes().perimeter_index.has_value() && *mp->paths.front().attributes().perimeter_index == 0;
+    return false;
+}
+
+struct ExternalSignature {
+    size_t n_external { 0 };
+    size_t n_closed   { 0 };
+    size_t n_clockwise{ 0 };
+    bool operator==(const ExternalSignature &rhs) const { return n_external == rhs.n_external && n_closed == rhs.n_closed && n_clockwise == rhs.n_clockwise; }
+};
+
+ExternalSignature external_signature(const std::vector<const ExtrusionEntity*> &externals)
+{
+    ExternalSignature sig;
+    for (const ExtrusionEntity *e : externals) {
+        ++ sig.n_external;
+        if (auto *loop = dynamic_cast<const ExtrusionLoop*>(e)) {
+            ++ sig.n_closed;
+            if (loop->is_clockwise())
+                ++ sig.n_clockwise;
+        }
+    }
+    return sig;
+}
+
+Point entity_center(const ExtrusionEntity *e)
+{
+    Points pts;
+    e->collect_points(pts);
+    return get_extents(pts).center();
+}
+
+// Entity kind for matching: 0 = open (multipath), 1 = closed counter-clockwise, 2 = closed clockwise.
+int entity_kind(const ExtrusionEntity *e)
+{
+    if (auto *loop = dynamic_cast<const ExtrusionLoop*>(e))
+        return loop->is_clockwise() ? 2 : 1;
+    return 0;
+}
+
+// Order the new externals so that they follow the slots of the normal externals (greedy by kind and distance of the bounding box centers).
+// Returns false when the matching is impossible.
+bool match_externals_to_slots(const std::vector<const ExtrusionEntity*> &slots, const std::vector<ExtrusionEntity*> &fresh, std::vector<ExtrusionEntity*> &ordered)
+{
+    if (slots.size() != fresh.size())
+        return false;
+    std::vector<Point> fresh_centers;
+    fresh_centers.reserve(fresh.size());
+    for (const ExtrusionEntity *e : fresh)
+        fresh_centers.emplace_back(entity_center(e));
+    std::vector<char> used(fresh.size(), 0);
+    ordered.assign(slots.size(), nullptr);
+    for (size_t i = 0; i < slots.size(); ++ i) {
+        const Point c    = entity_center(slots[i]);
+        const int   kind = entity_kind(slots[i]);
+        double best = std::numeric_limits<double>::max();
+        size_t best_j = size_t(-1);
+        for (size_t j = 0; j < fresh.size(); ++ j)
+            if (! used[j] && entity_kind(fresh[j]) == kind) {
+                const double d = (fresh_centers[j] - c).cast<double>().squaredNorm();
+                if (d < best) { best = d; best_j = j; }
+            }
+        if (best_j == size_t(-1))
+            return false;
+        used[best_j] = 1;
+        ordered[i] = fresh[best_j];
+    }
+    return true;
+}
+
+// Debug dump of external loops (text, mm): one line per entity.
+void ext_res_append_text(std::string &out, const ExtrusionEntity *e)
+{
+    Points pts;
+    e->collect_points(pts);
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%c %d %d", dynamic_cast<const ExtrusionLoop*>(e) ? 'L' : 'M', int(dynamic_cast<const ExtrusionLoop*>(e) != nullptr),
+        int(dynamic_cast<const ExtrusionLoop*>(e) != nullptr && static_cast<const ExtrusionLoop*>(e)->is_clockwise()));
+    out += buf;
+    for (const Point &p : pts) {
+        std::snprintf(buf, sizeof(buf), " %.6f %.6f", unscale<double>(p.x()), unscale<double>(p.y()));
+        out += buf;
+    }
+    out += '\n';
+}
+
+void ext_res_append_expolygons(std::string &out, const ExPolygons &expolygons)
+{
+    char buf[96];
+    for (const ExPolygon &ex : expolygons)
+        for (size_t i = 0; i < ex.num_contours(); ++ i) {
+            out += i == 0 ? "S 1 0" : "S 0 0";
+            for (const Point &p : ex.contour_or_hole(i).points) {
+                std::snprintf(buf, sizeof(buf), " %.6f %.6f", unscale<double>(p.x()), unscale<double>(p.y()));
+                out += buf;
+            }
+            out += '\n';
+        }
+}
+
+void ext_res_write_file(const std::string &name, const std::string &text)
+{
+    std::ofstream f(std::string(ext_res_dump_dir()) + "/" + name, std::ios::app);
+    f << text;
+}
+
+std::string ext_res_plane_name(const char *prefix, double z)
+{
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s_%.4f.txt", prefix, z);
+    return buf;
+}
+
+void collect_external_entities(const ExtrusionEntityCollection &perimeters, std::vector<const ExtrusionEntity*> &out)
+{
+    for (const ExtrusionEntity *island : perimeters.entities)
+        if (island->is_collection())
+            for (const ExtrusionEntity *e : static_cast<const ExtrusionEntityCollection*>(island)->entities)
+                if (is_external_entity(e))
+                    out.emplace_back(e);
+}
+
+// Plain (k == 1) externals of a layer, tagged by the slicing plane: used to compare with the sub-passes of a thick run.
+void ext_res_dump_plain_externals(const LayerRegion &layerm, const ExtrusionEntityCollection &perimeters)
+{
+    std::vector<const ExtrusionEntity*> externals;
+    collect_external_entities(perimeters, externals);
+    std::string text;
+    for (const ExtrusionEntity *e : externals)
+        ext_res_append_text(text, e);
+    ExPolygons input;
+    for (const Surface &s : layerm.slices())
+        input.emplace_back(s.expolygon);
+    ext_res_append_expolygons(text, input);
+    ext_res_write_file(ext_res_plane_name("plane", layerm.layer()->slice_z), text);
+}
+
+} // namespace
+
 // Produce perimeter extrusions, gap fill extrusions and fill polygons for input slices.
 void LayerRegion::make_perimeters(
     // Input slices for which the perimeters, gap fills and fill expolygons are to be generated.
@@ -101,6 +283,7 @@ void LayerRegion::make_perimeters(
 {
     m_perimeters.clear();
     m_thin_fills.clear();
+    m_external_sub_passes.clear();
 
     perimeter_and_gapfill_ranges.reserve(perimeter_and_gapfill_ranges.size() + slices.size());
     // There may be more expolygons produced per slice, thus this reserve is conservative.
@@ -130,6 +313,8 @@ void LayerRegion::make_perimeters(
         perimeter_regions,
         spiral_vase
     );
+    // The two-pass bridge split cannot coexist with the level schedule of the external perimeter resolution (MVP).
+    params.two_pass_perimeters = this->layer()->external_resolution() <= 1;
 
     // Cummulative sum of polygons over all the regions.
     const ExPolygons *lower_slices = this->layer()->lower_layer ? &this->layer()->lower_layer->lslices : nullptr;
@@ -169,6 +354,279 @@ void LayerRegion::make_perimeters(
             ExtrusionRange{ perimeters_begin, uint32_t(m_perimeters.size()) }, 
             ExtrusionRange{ gap_fills_begin,  uint32_t(m_thin_fills.size()) });
         fill_expolygons_ranges.emplace_back(ExtrusionRange{ fill_expolygons_begin, uint32_t(fill_expolygons.size()) });
+    }
+
+    // External perimeter resolution. Only the single LayerRegion layers without PerimeterRegions are supported for now.
+    // TODO: layers merging several LayerRegions (slices merged from their sub-slices) and layers with PerimeterRegions fall back to k = 1.
+    if (this->layer()->external_resolution() > 1 && ! m_sub_slices.empty() && ! spiral_vase && region_config.perimeters > 0 &&
+        this->layer()->object()->config().perimeter_generator.value == PerimeterGeneratorType::Arachne) {
+        if (&slices == &m_slices && perimeter_regions.empty())
+            this->make_external_sub_passes(params, slices, perimeter_and_gapfill_ranges);
+        else
+            ext_res_stats(this->layer()->object()).fallback_layer_unsupported += slices.size();
+    } else if (ext_res_dump_dir() != nullptr && region_config.perimeters > 0)
+        ext_res_dump_plain_externals(*this, m_perimeters);
+}
+
+
+void external_resolution_stats_reset(const PrintObject *object)
+{
+    std::lock_guard<std::mutex> lock(g_ext_res_mutex);
+    g_ext_res_stats.erase(object);
+}
+
+void external_resolution_stats_log(const PrintObject *object, double perimeter_stage_seconds)
+{
+    size_t layers_k = 0;
+    for (const Layer *layer : object->layers())
+        if (layer->external_resolution() > 1)
+            ++ layers_k;
+    if (layers_k == 0)
+        return;
+    const ExtResStats &s = ext_res_stats(object);
+    BOOST_LOG_TRIVIAL(debug) << "External resolution: layers with k > 1: " << layers_k << " of " << object->layer_count()
+        << ", islands " << s.islands_total.load() << ", processed " << s.islands_processed.load() << ", sub-runs " << s.sub_runs.load()
+        << ", fallbacks: mapping " << s.fallback_mapping.load() << ", holes " << s.fallback_holes.load() << ", counts " << s.fallback_counts.load()
+        << ", no externals " << s.fallback_no_externals.load() << ", unsupported layer (multi-region / perimeter regions; surfaces) " << s.fallback_layer_unsupported.load()
+        << ", perimeter stage " << perimeter_stage_seconds << " s";
+}
+
+// External perimeter resolution: for every island of this region with k > 1 run the Arachne generator on the sub-slices (flows at the pass height h/k),
+// keep only the external loops, replace the normal external loops of the island by the top pass (k-1) and store the lower passes.
+void LayerRegion::make_external_sub_passes(
+    const PerimeterGenerator::Parameters                         &params,
+    const SurfaceCollection                                      &slices,
+    const std::vector<std::pair<ExtrusionRange, ExtrusionRange>> &perimeter_and_gapfill_ranges)
+{
+    const Layer *layer = this->layer();
+    const size_t k     = layer->external_resolution();
+    assert(k > 1 && m_sub_slices.size() == k && &slices == &m_slices);
+    assert(perimeter_and_gapfill_ranges.size() >= slices.size());
+    ExtResStats &stats = ext_res_stats(layer->object());
+    const size_t range_offset = perimeter_and_gapfill_ranges.size() - slices.size();
+    const double h_pass       = layer->height / double(k);
+
+    // Parameters of the sub-runs: flows at the pass height, no extra perimeters on overhangs, no two-pass bridge split.
+    PrintRegionConfig sub_config = params.config;
+    sub_config.extra_perimeters_on_overhangs.value = false;
+    const PrintRegionConfig &region_config = this->region().config();
+    const Flow ext_flow_pass = this->flow(frExternalPerimeter, h_pass);
+    // Overhang flow at the pass height: with thick bridges (round strand independent of the layer height) k stacked passes would over-extrude,
+    // so the plain pass flow is used; flat bridges keep the pass flow with the bridge flow ratio applied.
+    const Flow overhang_flow_pass = layer->object()->config().thick_bridges ?
+        ext_flow_pass : this->flow(frPerimeter, h_pass).with_flow_ratio(region_config.bridge_flow_ratio);
+    PerimeterGenerator::Parameters sub_params(
+        h_pass,
+        params.layer_id,
+        this->flow(frPerimeter, h_pass),
+        ext_flow_pass,
+        this->flow(frFirstInternalPerimeter, h_pass),
+        this->flow(frSecondInternalPerimeter, h_pass),
+        overhang_flow_pass,
+        this->flow(frSolidInfill, h_pass),
+        sub_config,
+        params.object_config,
+        params.print_config,
+        params.perimeter_regions,
+        false);
+    sub_params.two_pass_perimeters = false;
+
+    // Per sub-plane inputs. This region is the only region of the layer, so its raw sub-slices are what a plain thin print would use as lslices.
+    // The lower slices of sub-plane 0 are the topmost sub-slices of the lower layer and the upper slices of the last sub-plane are the first sub-slices
+    // of the upper layer (the plane a thin print would see next to it) if the neighbouring layer has sub-slices and a single region,
+    // otherwise the neighbouring layer's lslices. An empty upper plane means "topmost" (nullptr), as in a thin print.
+    // (A literal reading of the spec - always the neighbouring lslices - differs from a thin print at top / bridge surfaces: top_one_perimeter_type and the overhang detection use them.)
+    auto neighbour_sub_slices = [](const Layer *neighbour, bool topmost_plane) -> const ExPolygons* {
+        if (neighbour == nullptr)
+            return nullptr;
+        if (neighbour->external_resolution() > 1 && neighbour->region_count() == 1) {
+            const std::vector<ExPolygons> &subs = neighbour->get_region(0)->m_sub_slices;
+            if (subs.size() == neighbour->external_resolution())
+                return topmost_plane ? &subs.back() : &subs.front();
+        }
+        return &neighbour->lslices;
+    };
+    std::vector<const ExPolygons*> lower_slices(k), upper_slices(k);
+    for (size_t j = 0; j < k; ++ j) {
+        lower_slices[j] = j == 0 ? neighbour_sub_slices(layer->lower_layer, true) : &m_sub_slices[j - 1];
+        upper_slices[j] = j + 1 == k ? neighbour_sub_slices(layer->upper_layer, false) : &m_sub_slices[j + 1];
+        if (j + 1 != k || (layer->upper_layer != nullptr && layer->upper_layer->external_resolution() > 1))
+            if (upper_slices[j] != nullptr && upper_slices[j]->empty())
+                upper_slices[j] = nullptr;
+    }
+    // A fresh cache of the offsetted lower slices per sub-plane (shared by the islands of this region).
+    std::vector<Polygons> lower_caches(k);
+
+    // Bounding boxes of the sub-expolygons.
+    std::vector<BoundingBoxes> sub_bboxes(k);
+    for (size_t j = 0; j < k; ++ j) {
+        sub_bboxes[j].reserve(m_sub_slices[j].size());
+        for (const ExPolygon &ex : m_sub_slices[j])
+            sub_bboxes[j].emplace_back(get_extents(ex));
+    }
+    // Claims of the sub-expolygons by the islands (an expolygon claimed by two islands makes both fall back).
+    std::vector<std::vector<int>> sub_claims(k);
+    std::vector<std::vector<int>> island_sub(slices.surfaces.size(), std::vector<int>(k, -1));
+    std::vector<std::vector<int>> island_nsub(slices.surfaces.size(), std::vector<int>(k, 0));
+    for (size_t j = 0; j < k; ++ j)
+        sub_claims[j].assign(m_sub_slices[j].size(), 0);
+    for (size_t s = 0; s < slices.surfaces.size(); ++ s) {
+        const ExPolygon   &island = slices.surfaces[s].expolygon;
+        const BoundingBox  island_bbox = get_extents(island);
+        for (size_t j = 0; j < k; ++ j)
+            for (size_t e = 0; e < m_sub_slices[j].size(); ++ e) {
+                if (! island_bbox.overlap(sub_bboxes[j][e]))
+                    continue;
+                const double area_e = m_sub_slices[j][e].area();
+                if (area_e <= 0.)
+                    continue;
+                // The sub-expolygon belongs to the island if at least half of it lies inside the island.
+                double overlap = 0.;
+                for (const ExPolygon &x : intersection_ex(ExPolygons{ m_sub_slices[j][e] }, ExPolygons{ island }))
+                    overlap += x.area();
+                if (overlap >= 0.5 * area_e) {
+                    ++ island_nsub[s][j];
+                    island_sub[s][j] = int(e);
+                    ++ sub_claims[j][e];
+                }
+            }
+    }
+
+    std::vector<ExtrusionEntityCollection> passes(k - 1);
+    // Debug dumps.
+    std::vector<std::string> dump_hd(k);
+    std::string              dump_thick;
+
+    for (size_t s = 0; s < slices.surfaces.size(); ++ s) {
+        const Surface        &surface = slices.surfaces[s];
+        const ExtrusionRange &range   = perimeter_and_gapfill_ranges[range_offset + s].first;
+        ++ stats.islands_total;
+        if (range.empty() || range.size() != 1 || ! m_perimeters.entities[*range.begin()]->is_collection()) {
+            ++ stats.fallback_no_externals;
+            continue;
+        }
+        ExtrusionEntityCollection &island_coll = static_cast<ExtrusionEntityCollection&>(*m_perimeters.entities[*range.begin()]);
+        // The external slots of the normal run.
+        std::vector<size_t>                 slot_idx;
+        std::vector<const ExtrusionEntity*> slot_entities;
+        for (size_t i = 0; i < island_coll.entities.size(); ++ i)
+            if (is_external_entity(island_coll.entities[i])) {
+                slot_idx.emplace_back(i);
+                slot_entities.emplace_back(island_coll.entities[i]);
+            }
+        if (slot_idx.empty()) {
+            ++ stats.fallback_no_externals;
+            continue;
+        }
+        // (1) Exactly one sub-expolygon per plane maps to this island and it is not shared with another island.
+        bool ok = true;
+        for (size_t j = 0; j < k && ok; ++ j)
+            ok = island_nsub[s][j] == 1 && sub_claims[j][size_t(island_sub[s][j])] == 1;
+        if (! ok) {
+            ++ stats.fallback_mapping;
+            BOOST_LOG_TRIVIAL(trace) << "External resolution fallback (mapping): layer " << layer->id() << " print_z " << layer->print_z << " island " << s;
+            continue;
+        }
+        // (2) Equal hole counts.
+        for (size_t j = 0; j < k && ok; ++ j)
+            ok = m_sub_slices[j][size_t(island_sub[s][j])].holes.size() == surface.expolygon.holes.size();
+        if (! ok) {
+            ++ stats.fallback_holes;
+            BOOST_LOG_TRIVIAL(trace) << "External resolution fallback (holes): layer " << layer->id() << " print_z " << layer->print_z << " island " << s;
+            continue;
+        }
+        // The sub-runs.
+        const ExternalSignature normal_sig = external_signature(slot_entities);
+        std::vector<std::vector<ExtrusionEntity*>> ordered(k);
+        std::vector<ExtrusionEntity*>              all_fresh;     // ownership until committed
+        for (size_t j = 0; j < k && ok; ++ j) {
+            Surface sub_surface(stInternal, m_sub_slices[j][size_t(island_sub[s][j])]);
+            sub_surface.extra_perimeters = surface.extra_perimeters;
+            ExtrusionEntityCollection tmp_loops, tmp_gaps;
+            ExPolygons                tmp_fill;
+            PerimeterGenerator::process_arachne(sub_params, sub_surface, lower_slices[j], upper_slices[j], lower_caches[j], tmp_loops, tmp_gaps, tmp_fill);
+            ++ stats.sub_runs;
+            std::vector<ExtrusionEntity*> fresh;
+            if (! tmp_loops.entities.empty() && tmp_loops.entities.front()->is_collection()) {
+                ExtrusionEntityCollection &isl = static_cast<ExtrusionEntityCollection&>(*tmp_loops.entities.front());
+                for (ExtrusionEntity *&e : isl.entities)
+                    if (is_external_entity(e)) {
+                        fresh.emplace_back(e);
+                        e = nullptr;        // ownership moved out of the scratch collection
+                    }
+            }
+            all_fresh.insert(all_fresh.end(), fresh.begin(), fresh.end());
+            // (3) Equal counts of external entities, closed loops and clockwise loops.
+            std::vector<const ExtrusionEntity*> fresh_const(fresh.begin(), fresh.end());
+            if (! (external_signature(fresh_const) == normal_sig) || ! match_externals_to_slots(slot_entities, fresh, ordered[j]))
+                ok = false;
+        }
+        if (! ok) {
+            for (ExtrusionEntity *e : all_fresh)
+                delete e;
+            ++ stats.fallback_counts;
+            BOOST_LOG_TRIVIAL(trace) << "External resolution fallback (counts): layer " << layer->id() << " print_z " << layer->print_z << " island " << s;
+            continue;
+        }
+        // Commit. Dump the normal (thick) externals first.
+        if (ext_res_dump_dir() != nullptr)
+            for (const ExtrusionEntity *e : slot_entities)
+                ext_res_append_text(dump_thick, e);
+        for (size_t j = 0; j + 1 < k; ++ j)
+            for (ExtrusionEntity *e : ordered[j]) {
+                if (ext_res_dump_dir() != nullptr)
+                    ext_res_append_text(dump_hd[j], e);
+                passes[j].entities.emplace_back(e);
+            }
+        for (size_t i = 0; i < slot_idx.size(); ++ i) {
+            if (ext_res_dump_dir() != nullptr)
+                ext_res_append_text(dump_hd[k - 1], ordered[k - 1][i]);
+            delete island_coll.entities[slot_idx[i]];
+            island_coll.entities[slot_idx[i]] = ordered[k - 1][i];
+        }
+        ++ stats.islands_processed;
+    }
+
+    bool any = false;
+    for (const ExtrusionEntityCollection &c : passes)
+        any |= ! c.empty();
+    if (any)
+        m_external_sub_passes = std::move(passes);
+
+    if (const char *dir = ext_res_dump_dir(); dir != nullptr && any) {
+        const double z0 = layer->slice_z - 0.5 * layer->height;
+        for (size_t j = 0; j < k; ++ j) {
+            ext_res_append_expolygons(dump_hd[j], m_sub_slices[j]);
+            ext_res_write_file(ext_res_plane_name("plane", z0 + (double(j) + 0.5) * h_pass), dump_hd[j]);
+        }
+        ext_res_write_file(ext_res_plane_name("thick", layer->slice_z), dump_thick);
+        // SVG: thick externals in grey, the passes in colours.
+        static const char *colors[] = { "red", "blue", "green", "orange", "purple", "brown", "cyan", "magenta" };
+        BoundingBox bbox;
+        for (const ExPolygon &ex : layer->lslices)
+            bbox.merge(get_extents(ex));
+        if (bbox.defined) {
+            char name[256];
+            std::snprintf(name, sizeof(name), "%s/layer_%04zu_z%.3f.svg", dir, layer->id(), layer->print_z);
+            ::Slic3r::SVG svg(name, bbox);
+            const double w = scale_(0.04);
+            for (const ExtrusionEntity *island : m_perimeters.entities)
+                if (island->is_collection())
+                    for (const ExtrusionEntity *e : static_cast<const ExtrusionEntityCollection*>(island)->entities)
+                        if (is_external_entity(e)) {
+                            Polylines pls;
+                            e->collect_polylines(pls);
+                            // The top pass (k-1) replaced the thick loops: drawn in the last colour.
+                            svg.draw(pls, colors[(k - 1) % 8], w);
+                        }
+            for (size_t j = 0; j + 1 < k; ++ j) {
+                Polylines pls;
+                if (! m_external_sub_passes.empty())
+                    m_external_sub_passes[j].collect_polylines(pls);
+                svg.draw(pls, colors[j % 8], w);
+            }
+            svg.Close();
+        }
     }
 }
 

@@ -766,6 +766,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // The rest
     ((ConfigOptionBool,                thick_bridges))
     ((ConfigOptionEnum<TwoPassBridgeScope>, two_pass_bridge_scope))
+    ((ConfigOptionInt,                 external_perimeter_resolution))
     ((ConfigOptionFloat,               xy_size_compensation))
     ((ConfigOptionBool,                wipe_into_objects))
 
@@ -1145,6 +1146,24 @@ inline bool two_pass_height_allowed(const PrintConfig &config, int extruder_1bas
     if (min_lh == 0.)
         min_lh = 0.07;
     return layer_height * 0.5 + EPSILON >= std::max(0.01, min_lh);
+}
+
+// External perimeter resolution: the external perimeter is printed as up to N stacked passes of
+// layer_height / k, k = max{ n <= N : n * min_lh <= layer_height + EPSILON }. min_lh is the minimum layer height of
+// the perimeter extruder (0 means the 0.07 default, floor 0.01; same rules as two_pass_height_allowed).
+// Deliberately not floor(h / min_lh): 0.21 / 0.07 = 2.9999999999999996.
+inline int external_resolution_factor(double layer_height, double min_layer_height, int requested)
+{
+    if (min_layer_height == 0.)
+        min_layer_height = 0.07;
+    min_layer_height = std::max(0.01, min_layer_height);
+    int k = 1;
+    for (int n = 2; n <= requested; ++ n)
+        if (double(n) * min_layer_height <= layer_height + EPSILON)
+            k = n;
+        else
+            break;
+    return k;
 }
 
 PRINT_CONFIG_CLASS_DERIVED_DEFINE0(

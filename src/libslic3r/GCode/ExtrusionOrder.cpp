@@ -515,6 +515,59 @@ bool is_empty(const std::vector<SliceExtrusions> &extrusions) {
     return true;
 }
 
+bool is_empty(const std::vector<SubPassExtrusions> &extrusions) {
+    for (const SubPassExtrusions &e : extrusions)
+        if (!e.perimeters.empty())
+            return false;
+    return true;
+}
+
+std::vector<SubPassExtrusions> extract_sub_pass_perimeters(
+    const Print &print,
+    const Layer &layer,
+    const std::size_t pass,
+    const LayerTools &layer_tools,
+    const std::size_t instance_id,
+    const unsigned extruder_id,
+    const Point &offset,
+    std::optional<Point> &previous_position,
+    const PathSmoothingFunction &smooth_path
+) {
+    std::vector<SubPassExtrusions> result;
+    for (const LayerRegion *layerm : layer.regions()) {
+        const std::vector<ExtrusionEntityCollection> &passes = layerm->external_sub_passes();
+        if (pass >= passes.size() || passes[pass].empty())
+            continue;
+        const ExtrusionEntityCollection &eec = passes[pass];
+        const PrintRegion &region = print.get_print_region(layerm->region().print_region_id());
+        if (get_extruder_id(eec, layer_tools, region, instance_id) != static_cast<int>(extruder_id))
+            continue;
+
+        result.push_back(SubPassExtrusions{&region, {}});
+        std::vector<Perimeter> &perimeters = result.back().perimeters;
+        const std::optional<InstancePoint> start_instance_point{get_instance_point(previous_position, offset)};
+        const Point *start_near = start_instance_point ? &start_instance_point->local_point : nullptr;
+        for (const ExtrusionEntityReference &reference : chain_extrusion_references(eec, start_near)) {
+            const ExtrusionEntity *ee = &reference.extrusion_entity();
+            if (auto *ep = dynamic_cast<const ExtrusionPath *>(ee); ep && ep->polyline.empty())
+                continue;
+            bool flipped{reference.flipped()};
+            if (auto loop = dynamic_cast<const ExtrusionLoop *>(ee)) {
+                const bool is_hole = loop->is_clockwise();
+                flipped = print.config().prefer_clockwise_movements ? !is_hole : is_hole;
+            }
+            const ExtrusionEntityReference ref{*ee, flipped};
+            std::optional<InstancePoint> last_position{get_instance_point(previous_position, offset)};
+            // layer == nullptr and region == nullptr: no seam placement and no scarf for the sub-pass loops.
+            auto [path, wipe_offset]{smooth_path(nullptr, nullptr, ref, extruder_id, last_position)};
+            previous_position = get_gcode_point(last_position, offset);
+            if (!path.empty())
+                perimeters.push_back(Perimeter{std::move(path), flipped, ee, wipe_offset});
+        }
+    }
+    return result;
+}
+
 bool is_empty(const ExtruderExtrusions &extruder_extrusions) {
     for (const OverridenExtrusions &overriden_extrusions : extruder_extrusions.overriden_extrusions) {
         if (!is_empty(overriden_extrusions.slices_extrusions)) {

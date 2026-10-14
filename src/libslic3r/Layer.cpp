@@ -698,6 +698,7 @@ void Layer::make_perimeters()
         layerm.m_perimeters.clear();
         layerm.m_fills.clear();
         layerm.m_thin_fills.clear();
+        layerm.m_external_sub_passes.clear();
         layerm.m_fill_expolygons.clear();
         layerm.m_fill_expolygons_bboxes.clear();
         layerm.m_fill_expolygons_composite.clear();

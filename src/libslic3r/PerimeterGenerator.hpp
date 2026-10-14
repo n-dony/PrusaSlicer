@@ -132,6 +132,10 @@ struct Parameters {
     double                       second_internal_mm3_per_mm;
     double                       mm3_per_mm_overhang;
 
+    // Two-pass bridge split of overhang perimeters. Switched off on layers printing the external perimeter in k > 1 passes
+    // and in the high-definition external sub-runs.
+    bool                         two_pass_perimeters { true };
+
 private:
     Parameters() = delete;
 };

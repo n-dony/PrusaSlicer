@@ -7,6 +7,9 @@
 #include <oneapi/tbb/parallel_for.h>
 #include <algorithm>
 #include <functional>
+#include <iomanip>
+#include <limits>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -536,6 +539,27 @@ void PrintObject::slice()
     m_typed_slices = false;
     this->clear_layers();
     m_layers = new_layers(this, generate_object_layers(m_slicing_params, layer_height_profile));
+    // External perimeter resolution: decide the number of stacked external passes k of every layer.
+    // k stays 1 where the sub-slices cannot be produced or consumed: the first object layer, spiral vase, multi-material / fuzzy skin painted
+    // objects, interlocking, virtual extruders, multi-extruder prints (a level cannot host a tool change) and the classic perimeter generator.
+    // TODO: layers whose regions end up with PerimeterRegions are only known in Layer::make_perimeters(), where the sub-passes are skipped.
+    if (const int requested = m_config.external_perimeter_resolution.value; requested > 1 && ! m_layers.empty() &&
+        m_config.perimeter_generator.value == PerimeterGeneratorType::Arachne &&
+        ! m_print->config().spiral_vase.value && ! this->is_mm_painted() && ! this->is_fuzzy_skin_painted() &&
+        ! m_config.interlocking_beam.value && m_print->virtual_extruders().empty() &&
+        ! (m_print->config().nozzle_diameter.size() > 1 && m_print->extruders().size() > 1)) {
+        // Minimum layer height over the perimeter extruders of all object regions (0 means the default 0.07, floor 0.01, as in Slicing.cpp).
+        double min_lh = std::numeric_limits<double>::max();
+        for (const std::unique_ptr<PrintRegion> &region : m_shared_regions->all_regions) {
+            const int    extruder = std::max(region->config().perimeter_extruder.value, 1);
+            const double raw      = m_print->config().min_layer_height.get_at(extruder - 1);
+            min_lh = std::min(min_lh, raw == 0. ? 0.07 : std::max(0.01, raw));
+        }
+        if (min_lh == std::numeric_limits<double>::max())
+            min_lh = 0.07;
+        for (size_t i = 1; i < m_layers.size(); ++ i)
+            m_layers[i]->m_external_resolution = uint8_t(external_resolution_factor(m_layers[i]->height, min_lh, requested));
+    }
     this->slice_volumes();
     m_print->throw_if_canceled();
 #if 0
@@ -883,16 +907,73 @@ void PrintObject::slice_volumes()
     }
 
     std::vector<float>                   slice_zs      = zs_from_layers(m_layers);
-    std::vector<std::vector<ExPolygons>> region_slices = slices_to_regions(this->model_object()->volumes, *m_shared_regions, slice_zs,
-        slice_volumes_inner(
-            print->config(), this->config(), this->trafo_centered(),
-            this->model_object()->volumes, m_shared_regions->layer_ranges, slice_zs, throw_on_cancel_callback),
-        throw_on_cancel_callback);
-
-    for (size_t region_id = 0; region_id < region_slices.size(); ++ region_id) {
-        std::vector<ExPolygons> &by_layer = region_slices[region_id];
-        for (size_t layer_id = 0; layer_id < by_layer.size(); ++ layer_id)
-            m_layers[layer_id]->regions()[region_id]->m_slices.append(std::move(by_layer[layer_id]), stInternal);
+    if (std::getenv("SLIC3R_DUMP_SLICE_PLANES") != nullptr)
+        for (float z : slice_zs)
+            BOOST_LOG_TRIVIAL(debug) << "slice plane " << std::fixed << std::setprecision(9) << z;
+    const bool                           has_sub_slices = std::any_of(m_layers.begin(), m_layers.end(), [](const Layer *l) { return l->m_external_resolution > 1; });
+    std::vector<std::vector<ExPolygons>> region_slices;
+    if (! has_sub_slices) {
+        // The common case: no merged plane list, no extra allocation.
+        region_slices = slices_to_regions(this->model_object()->volumes, *m_shared_regions, slice_zs,
+            slice_volumes_inner(
+                print->config(), this->config(), this->trafo_centered(),
+                this->model_object()->volumes, m_shared_regions->layer_ranges, slice_zs, throw_on_cancel_callback),
+            throw_on_cancel_callback);
+        for (size_t region_id = 0; region_id < region_slices.size(); ++ region_id) {
+            std::vector<ExPolygons> &by_layer = region_slices[region_id];
+            for (size_t layer_id = 0; layer_id < by_layer.size(); ++ layer_id)
+                m_layers[layer_id]->regions()[region_id]->m_slices.append(std::move(by_layer[layer_id]), stInternal);
+        }
+    } else {
+        // External perimeter resolution: the sub-planes slice_z - h/2 + (j + 0.5) h / k of the layers with k > 1 are merged with the normal planes
+        // into one sorted list and everything is sliced by a single call. Spiral vase is excluded (k == 1), as slice_volumes_inner() indexes zs by the layer index there.
+        assert(! print->config().spiral_vase.value);
+        struct PlaneRef { float z; uint32_t layer; int32_t sub; };   // sub == -1: the normal plane of the layer
+        std::vector<PlaneRef> refs;
+        refs.reserve(m_layers.size() * 2);
+        for (uint32_t layer_id = 0; layer_id < uint32_t(m_layers.size()); ++ layer_id) {
+            const Layer *layer = m_layers[layer_id];
+            refs.push_back({ slice_zs[layer_id], layer_id, -1 });
+            const int k = layer->m_external_resolution;
+            if (k > 1)
+                for (int j = 0; j < k; ++ j)
+                    refs.push_back({ float(layer->slice_z - 0.5 * layer->height + (double(j) + 0.5) * layer->height / double(k)), layer_id, j });
+        }
+        std::stable_sort(refs.begin(), refs.end(), [](const PlaneRef &l, const PlaneRef &r) {
+            return l.z < r.z || (l.z == r.z && l.sub < r.sub); });
+        // Unique planes (a sub-plane of an odd k coincides with the normal plane of its layer), map plane index per reference.
+        std::vector<float>    merged_zs;
+        std::vector<uint32_t> plane_of_ref(refs.size());
+        merged_zs.reserve(refs.size());
+        for (size_t i = 0; i < refs.size(); ++ i) {
+            if (merged_zs.empty() || merged_zs.back() != refs[i].z)
+                merged_zs.emplace_back(refs[i].z);
+            plane_of_ref[i] = uint32_t(merged_zs.size() - 1);
+        }
+        if (std::getenv("SLIC3R_DUMP_SLICE_PLANES") != nullptr)
+            for (float z : merged_zs)
+                BOOST_LOG_TRIVIAL(debug) << "merged plane " << std::fixed << std::setprecision(9) << z;
+        BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - external resolution: merged plane list " << merged_zs.size() << " planes ("
+                                 << slice_zs.size() << " normal)";
+        region_slices = slices_to_regions(this->model_object()->volumes, *m_shared_regions, merged_zs,
+            slice_volumes_inner(
+                print->config(), this->config(), this->trafo_centered(),
+                this->model_object()->volumes, m_shared_regions->layer_ranges, merged_zs, throw_on_cancel_callback),
+            throw_on_cancel_callback);
+        for (size_t region_id = 0; region_id < region_slices.size(); ++ region_id) {
+            std::vector<ExPolygons> &by_plane = region_slices[region_id];
+            // Sub-slices first (copies), as a sub-plane may share its plane with the normal plane which is moved out below.
+            for (size_t i = 0; i < refs.size(); ++ i)
+                if (refs[i].sub >= 0) {
+                    LayerRegion *layerm = m_layers[refs[i].layer]->regions()[region_id];
+                    if (layerm->m_sub_slices.empty())
+                        layerm->m_sub_slices.assign(m_layers[refs[i].layer]->m_external_resolution, ExPolygons());
+                    layerm->m_sub_slices[refs[i].sub] = by_plane[plane_of_ref[i]];
+                }
+            for (size_t i = 0; i < refs.size(); ++ i)
+                if (refs[i].sub < 0)
+                    m_layers[refs[i].layer]->regions()[region_id]->m_slices.append(std::move(by_plane[plane_of_ref[i]]), stInternal);
+        }
     }
     region_slices.clear();
     
@@ -1013,6 +1094,28 @@ void PrintObject::slice_volumes()
 		                        trimming = offset(layer->merged(float(SCALED_EPSILON)), xy_compensation_scaled - float(SCALED_EPSILON));
 	                        for (size_t region_id = 0; region_id < layer->m_regions.size(); ++ region_id)
 	                            layer->m_regions[region_id]->trim_surfaces(trimming);
+	                    }
+	                }
+	                if (layer->m_external_resolution > 1 && xy_compensation_scaled < 0.f) {
+	                    // External perimeter resolution: the sub-slices receive the same negative XY compensation / multi-region trimming
+	                    // (the elephant foot compensation never applies: k == 1 on the first layer).
+	                    if (layer->m_regions.size() == 1) {
+	                        for (ExPolygons &sub : layer->m_regions.front()->m_sub_slices)
+	                            sub = offset_ex(std::move(sub), xy_compensation_scaled);
+	                    } else {
+	                        for (size_t j = 0; j < size_t(layer->m_external_resolution); ++ j) {
+	                            Polygons polygons;
+	                            for (LayerRegion *layerm : layer->m_regions) {
+	                                const PrintRegionConfig &config = layerm->region().config();
+	                                if (j < layerm->m_sub_slices.size() &&
+	                                    (config.bottom_solid_layers > 0 || config.top_solid_layers > 0 || config.fill_density > 0. || config.perimeters > 0))
+	                                    append(polygons, offset(layerm->m_sub_slices[j], float(SCALED_EPSILON)));
+	                            }
+	                            const Polygons trimming = offset(union_ex(polygons), xy_compensation_scaled - float(SCALED_EPSILON));
+	                            for (LayerRegion *layerm : layer->m_regions)
+	                                if (j < layerm->m_sub_slices.size())
+	                                    layerm->m_sub_slices[j] = intersection_ex(layerm->m_sub_slices[j], trimming);
+	                        }
 	                    }
 	                }
 	                // Merge all regions' slices to get islands sorted topologically, chain them by a shortest path in separate index list

@@ -220,6 +220,9 @@ public:
         for (const LayerRegion *layerm : m_regions) if (layerm->slices().any_bottom_contains(item)) return true;
         return false;
     }
+    // External perimeter resolution: number of stacked passes k (1 = disabled) of the external perimeter of this layer,
+    // computed by PrintObject::slice() from external_perimeter_resolution, the layer height and the minimum layer height.
+    unsigned int            external_resolution() const { return m_external_resolution; }
     void                    make_perimeters();
     void                    make_fills(FillAdaptive::Octree     *adaptive_fill_octree,
                                        FillAdaptive::Octree     *support_fill_octree,
@@ -274,6 +277,8 @@ private:
     size_t              m_id;
     PrintObject        *m_object;
     LayerRegionPtrs     m_regions;
+    // See external_resolution().
+    uint8_t             m_external_resolution { 1 };
 };
 
 class SupportLayer : public Layer 

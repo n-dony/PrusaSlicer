@@ -4128,6 +4128,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<TwoPassBridgeScope>(TwoPassBridgeScope::Disabled));
 
+    def = this->add("external_perimeter_resolution", coInt);
+    def->label = L("External perimeter resolution");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Print the external perimeter as N stacked passes of layer_height/N, each generated from a slice taken at the middle of its own pass, "
+                     "while internal perimeters and infill print once per layer at the full height. "
+                     "N is reduced per layer so that the pass height stays at or above the perimeter extruder's minimum layer height.");
+    def->sidetext = L("passes");
+    def->min = 1;
+    def->max = 8;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionInt(1));
+
     def = this->add("thin_walls", coBool);
     def->label = L("Detect thin walls");
     def->category = L("Layers and Perimeters");

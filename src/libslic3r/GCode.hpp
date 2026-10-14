@@ -268,6 +268,18 @@ private:
         // Otherwise print a single copy of a single object.
         const size_t                     single_object_idx = size_t(-1));
 
+    // External perimeter resolution: the lower levels of a print_z (one real layer per level, ascending Z) printing the
+    // lower passes of the external perimeters. level_idx indexes the sorted schedule of lower levels of this print_z
+    // (see sub_level_zs() in GCode.cpp). The top level is process_layer().
+    LayerResult process_sub_level(
+        const Print                     &print,
+        const ObjectsLayerToPrint       &layers,
+        const LayerTools                &layer_tools,
+        const GCode::SmoothPathCaches   &smooth_path_caches,
+        const size_t                     level_idx,
+        const std::vector<const PrintInstance*> *ordering,
+        const size_t                     single_object_idx = size_t(-1));
+
     // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
     // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
     // and export G-code into file.
@@ -291,6 +303,8 @@ private:
 
     void            set_extruders(const std::vector<unsigned int> &extruder_ids);
     std::string     preamble();
+    // Nozzle temperature / bed temperature transition from the 1st to the 2nd layer (idempotent: runs once).
+    std::string second_layer_transition(const Print &print, unsigned int first_extruder_id);
     std::string change_layer(
         coordf_t previous_layer_z,
         coordf_t print_z,
@@ -442,6 +456,9 @@ private:
     // How many times will change_layer() be called?
     // change_layer() will update the progress bar.
     unsigned int                        m_layer_count;
+    // External perimeter resolution: a lower level of the current print_z has already been emitted (it carried the
+    // before_layer_gcode and the custom G-code of this print_z), consumed by process_layer() of the top level.
+    bool                                m_sub_levels_emitted { false };
     // Progress bar indicator. Increments from -1 up to layer_count.
     int                                 m_layer_index;
     // Active Z offset applied for the current bridge pass so successive passes stack

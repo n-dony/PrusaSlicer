@@ -974,6 +974,66 @@ static inline GCode::SmoothPathCache::InterpolationParameters interpolation_para
     };
 }
 
+// External perimeter resolution (k stacked passes of the external perimeter): helpers of the level schedule.
+// The pass j (0 .. k-2) of a layer is printed as a lower level at the nozzle Z (without the z offset) z0 + (j + 1) * h / k,
+// z0 = print_z - h. The top pass k-1 stays in the normal layer, printed at print_z by process_layer().
+static bool sub_pass_present(const Layer *layer, size_t pass)
+{
+    if (layer == nullptr || layer->external_resolution() <= 1 || pass + 1 >= layer->external_resolution())
+        return false;
+    for (const LayerRegion *layerm : layer->regions()) {
+        const std::vector<ExtrusionEntityCollection> &passes = layerm->external_sub_passes();
+        if (pass < passes.size() && ! passes[pass].empty())
+            return true;
+    }
+    return false;
+}
+
+static double sub_pass_z(const Layer *layer, size_t pass)
+{
+    return layer->print_z - layer->height + double(pass + 1) * layer->height / double(layer->external_resolution());
+}
+
+// Sorted distinct nozzle Z of the lower levels required by the object layers of one print_z.
+static std::vector<double> sub_level_zs(const GCode::ObjectsLayerToPrint &layers)
+{
+    std::vector<double> zs;
+    for (const GCode::ObjectLayerToPrint &l : layers)
+        if (l.object_layer != nullptr && l.object_layer->external_resolution() > 1)
+            for (size_t j = 0; j + 1 < l.object_layer->external_resolution(); ++ j)
+                if (sub_pass_present(l.object_layer, j))
+                    zs.push_back(sub_pass_z(l.object_layer, j));
+    std::sort(zs.begin(), zs.end());
+    zs.erase(std::unique(zs.begin(), zs.end(), [](double a, double b) { return std::abs(a - b) < EPSILON; }), zs.end());
+    return zs;
+}
+
+// Pass of the object layer printed at the lower level of nozzle Z z, or -1.
+static int sub_pass_at_z(const Layer *layer, double z)
+{
+    if (layer != nullptr && layer->external_resolution() > 1)
+        for (size_t j = 0; j + 1 < layer->external_resolution(); ++ j)
+            if (sub_pass_present(layer, j) && std::abs(sub_pass_z(layer, j) - z) < EPSILON)
+                return int(j);
+    return -1;
+}
+
+// Number of lower levels of the whole print (non-sequential mode: the distinct (print_z, Z) pairs of all objects).
+static unsigned count_sub_levels(const Print &print)
+{
+    std::vector<std::pair<double, double>> pairs;
+    for (const PrintObject *object : print.objects())
+        for (const Layer *layer : object->layers())
+            if (layer->external_resolution() > 1)
+                for (size_t j = 0; j + 1 < layer->external_resolution(); ++ j)
+                    if (sub_pass_present(layer, j))
+                        pairs.emplace_back(layer->print_z, sub_pass_z(layer, j));
+    std::sort(pairs.begin(), pairs.end());
+    pairs.erase(std::unique(pairs.begin(), pairs.end(), [](const auto &a, const auto &b) {
+        return std::abs(a.first - b.first) < EPSILON && std::abs(a.second - b.second) < EPSILON; }), pairs.end());
+    return unsigned(pairs.size());
+}
+
 static inline GCode::SmoothPathCache smooth_path_interpolate_global(const Print& print)
 {
     const GCode::SmoothPathCache::InterpolationParameters interpolation_params = interpolation_parameters(print.config());
@@ -1097,6 +1157,13 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                 zs.push_back(layer->print_z);
             std::sort(zs.begin(), zs.end());
             m_layer_count += (unsigned int)(object->instances().size() * (std::unique(zs.begin(), zs.end()) - zs.begin()));
+            // External perimeter resolution: every lower level is one more layer change.
+            unsigned int sub_levels = 0;
+            for (const Layer *layer : object->layers())
+                for (size_t j = 0; j + 1 < layer->external_resolution(); ++ j)
+                    if (sub_pass_present(layer, j))
+                        ++ sub_levels;
+            m_layer_count += (unsigned int)(object->instances().size() * sub_levels);
         }
     }
     print.throw_if_canceled();
@@ -1241,7 +1308,7 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
         this->set_extruders(tool_ordering.all_extruders());
         // Order object instances using a nearest neighbor search.
         print_object_instances_ordering = chain_print_object_instances(print);
-        m_layer_count = tool_ordering.layer_tools().size();
+        m_layer_count = tool_ordering.layer_tools().size() + count_sub_levels(print);
     }
     if (initial_extruder_id == (unsigned int)-1) {
         // Nothing to print!
@@ -1594,11 +1661,26 @@ void GCodeGenerator::smooth_path_interpolate(
     if (const Layer *layer = object_layer_to_print.object_layer; layer) {
         for (const LayerRegion *layerm : layer->regions()) {
             out.interpolate_add(layerm->perimeters(), params);
+            for (const ExtrusionEntityCollection &sub_pass : layerm->external_sub_passes())
+                out.interpolate_add(sub_pass, params);
             out.interpolate_add(layerm->fills(), params);
         }
     }
     if (const SupportLayer *layer = object_layer_to_print.support_layer; layer)
         out.interpolate_add(layer->support_fills, params);
+}
+
+namespace {
+// External perimeter resolution: an item of the generator pipeline. level < top_level: a lower level, level == top_level: the layer itself.
+struct LevelItem {
+    size_t layer_idx;
+    size_t level;
+    size_t top_level;
+};
+struct LevelWork {
+    size_t                                          item_idx { 0 };
+    std::shared_ptr<const GCode::SmoothPathCache>   cache;
+};
 }
 
 // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
@@ -1612,44 +1694,61 @@ void GCodeGenerator::process_layers(
     const GCode::SmoothPathCache                                        &smooth_path_cache_global,
     GCodeOutputStream                                                   &output_stream)
 {
-    size_t layer_to_print_idx = 0;
+    // External perimeter resolution: the items of the pipeline are (layer, level) pairs, the lower levels of a print_z first
+    // and the top level (the layer itself) last. The smooth path cache of a layer is shared by all its levels.
+    std::vector<LevelItem> items;
+    items.reserve(layers_to_print.size());
+    for (size_t i = 0; i < layers_to_print.size(); ++ i) {
+        const size_t top_level = sub_level_zs(layers_to_print[i].second).size();
+        for (size_t level = 0; level <= top_level; ++ level)
+            items.push_back({ i, level, top_level });
+    }
+    size_t item_idx = 0;
+    std::shared_ptr<const GCode::SmoothPathCache> layer_cache;
     const GCode::SmoothPathCache::InterpolationParameters interpolation_params = interpolation_parameters(print.config());
-    const auto smooth_path_interpolator = tbb::make_filter<void, std::pair<size_t, GCode::SmoothPathCache>>(slic3r_tbb_filtermode::serial_in_order,
-        [this, &print, &layers_to_print, &layer_to_print_idx, &interpolation_params](tbb::flow_control &fc) -> std::pair<size_t, GCode::SmoothPathCache> {
-            if (layer_to_print_idx >= layers_to_print.size()) {
-                if (layer_to_print_idx == layers_to_print.size() + (m_pressure_equalizer ? 1 : 0)) {
+    const auto smooth_path_interpolator = tbb::make_filter<void, LevelWork>(slic3r_tbb_filtermode::serial_in_order,
+        [this, &print, &layers_to_print, &items, &item_idx, &layer_cache, &interpolation_params](tbb::flow_control &fc) -> LevelWork {
+            if (item_idx >= items.size()) {
+                if (item_idx == items.size() + (m_pressure_equalizer ? 1 : 0)) {
                     fc.stop();
                     return {};
                 } else {
                     // Pressure equalizer need insert empty input. Because it returns one layer back.
                     // Insert NOP (no operation) layer;
-                    return { layer_to_print_idx ++, {} };
+                    return { item_idx ++, {} };
                 }
             } else {
                 print.throw_if_canceled();
-                size_t idx = layer_to_print_idx ++;
-                GCode::SmoothPathCache smooth_path_cache;
-                for (const ObjectLayerToPrint &l : layers_to_print[idx].second)
-                    GCodeGenerator::smooth_path_interpolate(l, interpolation_params, smooth_path_cache);
-                return { idx, std::move(smooth_path_cache) };
+                size_t idx = item_idx ++;
+                if (idx == 0 || items[idx - 1].layer_idx != items[idx].layer_idx) {
+                    auto smooth_path_cache = std::make_shared<GCode::SmoothPathCache>();
+                    for (const ObjectLayerToPrint &l : layers_to_print[items[idx].layer_idx].second)
+                        GCodeGenerator::smooth_path_interpolate(l, interpolation_params, *smooth_path_cache);
+                    layer_cache = std::move(smooth_path_cache);
+                }
+                return { idx, layer_cache };
             }
         });
-    const auto generator = tbb::make_filter<std::pair<size_t, GCode::SmoothPathCache>, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
-        [this, &print, &tool_ordering, &print_object_instances_ordering, &layers_to_print, &smooth_path_cache_global](
-            std::pair<size_t, GCode::SmoothPathCache> in) -> LayerResult {
-            size_t layer_to_print_idx = in.first;
-            if (layer_to_print_idx == layers_to_print.size()) {
+    const auto generator = tbb::make_filter<LevelWork, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [this, &print, &tool_ordering, &print_object_instances_ordering, &layers_to_print, &items, &smooth_path_cache_global](
+            LevelWork in) -> LayerResult {
+            if (in.item_idx == items.size()) {
                 // Pressure equalizer need insert empty input. Because it returns one layer back.
                 // Insert NOP (no operation) layer;
                 return LayerResult::make_nop_layer_result();
             } else {
-                const std::pair<coordf_t, ObjectsLayerToPrint> &layer = layers_to_print[layer_to_print_idx];
+                const LevelItem &item = items[in.item_idx];
+                const std::pair<coordf_t, ObjectsLayerToPrint> &layer = layers_to_print[item.layer_idx];
                 const LayerTools& layer_tools = tool_ordering.tools_for_layer(layer.first);
+                print.throw_if_canceled();
+                if (item.level < item.top_level)
+                    return this->process_sub_level(print, layer.second, layer_tools,
+                        GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache },
+                        item.level, &print_object_instances_ordering, size_t(-1));
                 if (m_wipe_tower && layer_tools.has_wipe_tower)
                     m_wipe_tower->next_layer();
-                print.throw_if_canceled();
                 return this->process_layer(print, layer.second, layer_tools, 
-                    GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
+                    GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache }, 
                     &layer == &layers_to_print.back(), &print_object_instances_ordering, size_t(-1));
             }
         });
@@ -1711,39 +1810,55 @@ void GCodeGenerator::process_layers(
     const GCode::SmoothPathCache            &smooth_path_cache_global,
     GCodeOutputStream                       &output_stream)
 {
-    size_t layer_to_print_idx = 0;
+    // See the non-sequential overload: the items of the pipeline are (layer, level) pairs.
+    std::vector<LevelItem> items;
+    items.reserve(layers_to_print.size());
+    for (size_t i = 0; i < layers_to_print.size(); ++ i) {
+        const size_t top_level = sub_level_zs({ layers_to_print[i] }).size();
+        for (size_t level = 0; level <= top_level; ++ level)
+            items.push_back({ i, level, top_level });
+    }
+    size_t item_idx = 0;
+    std::shared_ptr<const GCode::SmoothPathCache> layer_cache;
     const GCode::SmoothPathCache::InterpolationParameters interpolation_params = interpolation_parameters(print.config());
-    const auto smooth_path_interpolator = tbb::make_filter<void, std::pair<size_t, GCode::SmoothPathCache>> (slic3r_tbb_filtermode::serial_in_order,
-        [this, &print, &layers_to_print, &layer_to_print_idx, interpolation_params](tbb::flow_control &fc) -> std::pair<size_t, GCode::SmoothPathCache> {
-            if (layer_to_print_idx >= layers_to_print.size()) {
-                if (layer_to_print_idx == layers_to_print.size() + (m_pressure_equalizer ? 1 : 0)) {
+    const auto smooth_path_interpolator = tbb::make_filter<void, LevelWork> (slic3r_tbb_filtermode::serial_in_order,
+        [this, &print, &layers_to_print, &items, &item_idx, &layer_cache, interpolation_params](tbb::flow_control &fc) -> LevelWork {
+            if (item_idx >= items.size()) {
+                if (item_idx == items.size() + (m_pressure_equalizer ? 1 : 0)) {
                     fc.stop();
                     return {};
                 } else {
                     // Pressure equalizer need insert empty input. Because it returns one layer back.
                     // Insert NOP (no operation) layer;
-                    return { layer_to_print_idx ++, {} };
+                    return { item_idx ++, {} };
                 }
             } else {
                 print.throw_if_canceled();
-                size_t idx = layer_to_print_idx ++;
-                GCode::SmoothPathCache smooth_path_cache;
-                GCodeGenerator::smooth_path_interpolate(layers_to_print[idx], interpolation_params, smooth_path_cache);
-                return { idx, std::move(smooth_path_cache) };
+                size_t idx = item_idx ++;
+                if (idx == 0 || items[idx - 1].layer_idx != items[idx].layer_idx) {
+                    auto smooth_path_cache = std::make_shared<GCode::SmoothPathCache>();
+                    GCodeGenerator::smooth_path_interpolate(layers_to_print[items[idx].layer_idx], interpolation_params, *smooth_path_cache);
+                    layer_cache = std::move(smooth_path_cache);
+                }
+                return { idx, layer_cache };
             }
         });
-    const auto generator = tbb::make_filter<std::pair<size_t, GCode::SmoothPathCache>, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
-        [this, &print, &tool_ordering, &layers_to_print, &smooth_path_cache_global, single_object_idx](std::pair<size_t, GCode::SmoothPathCache> in) -> LayerResult {
-            size_t layer_to_print_idx = in.first;
-            if (layer_to_print_idx == layers_to_print.size()) {
+    const auto generator = tbb::make_filter<LevelWork, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [this, &print, &tool_ordering, &layers_to_print, &items, &smooth_path_cache_global, single_object_idx](LevelWork in) -> LayerResult {
+            if (in.item_idx == items.size()) {
                 // Pressure equalizer need insert empty input. Because it returns one layer back.
                 // Insert NOP (no operation) layer;
                 return LayerResult::make_nop_layer_result();
             } else {
-                ObjectLayerToPrint &layer = layers_to_print[layer_to_print_idx];
+                const LevelItem &item = items[in.item_idx];
+                ObjectLayerToPrint &layer = layers_to_print[item.layer_idx];
                 print.throw_if_canceled();
+                if (item.level < item.top_level)
+                    return this->process_sub_level(print, { layer }, tool_ordering.tools_for_layer(layer.print_z()),
+                        GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache },
+                        item.level, nullptr, single_object_idx);
                 return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), 
-                    GCode::SmoothPathCaches{ smooth_path_cache_global, in.second }, 
+                    GCode::SmoothPathCaches{ smooth_path_cache_global, *in.cache }, 
                     &layer == &layers_to_print.back(), nullptr, single_object_idx);
             }
         });
@@ -2607,6 +2722,283 @@ std::vector<GCode::ExtrusionOrder::ExtruderExtrusions> GCodeGenerator::get_sorte
 }
 
 
+std::string GCodeGenerator::second_layer_transition(const Print &print, unsigned int first_extruder_id)
+{
+    std::string gcode;
+    if (m_second_layer_things_done)
+        return gcode;
+    // Transition from 1st to 2nd layer. Adjust nozzle temperatures as prescribed by the nozzle dependent
+    // first_layer_temperature vs. temperature settings.
+    for (const Extruder &extruder : m_writer.extruders()) {
+        if (print.config().single_extruder_multi_material.value || m_ooze_prevention.enable) {
+            // In single extruder multi material mode, set the temperature for the current extruder only.
+            // The same applies when ooze prevention is enabled.
+            if (extruder.id() != m_writer.extruder()->id())
+                continue;
+        }
+        int temperature = print.config().temperature.get_at(extruder.id());
+        if (temperature > 0 && (temperature != print.config().first_layer_temperature.get_at(extruder.id())))
+            gcode += m_writer.set_temperature(temperature, false, extruder.id());
+    }
+    // The nozzle of the current extruder is now at its steady-state temperature (either because
+    // the command above was just emitted, or because it already equalled first_layer_temperature).
+    // Seed the offset system's cache with it: without this it would still hold whatever offset
+    // temperature the first layer ended on, and would then suppress the M104 needed to reach the
+    // same offset again on this layer.
+    if (const Extruder *current_extruder = m_writer.extruder(); current_extruder != nullptr)
+        m_temperature_manager.note_temperature_set(print.config().temperature.get_at(current_extruder->id()));
+
+    // Bed temperature for layers from the 2nd layer is based on the first printing
+    // extruder on the layer or on the extruded in bed_temperature_extruder.
+    const int  num_extruders            = print.config().nozzle_diameter.values.size();
+    const int  bed_temperature_extruder = print.config().bed_temperature_extruder;
+    const bool use_first_extruder       = bed_temperature_extruder <= 0 || bed_temperature_extruder > num_extruders;
+    const int  bed_temperature          = print.config().bed_temperature.get_at(use_first_extruder ? first_extruder_id : bed_temperature_extruder - 1);
+    gcode += m_writer.set_bed_temperature(bed_temperature);
+
+    // Mark the temperature transition from 1st to 2nd layer to be finished.
+    m_second_layer_things_done = true;
+    return gcode;
+}
+
+// External perimeter resolution: one lower level (a real layer at the nozzle Z of the level) of a print_z, printing the
+// lower passes of the external perimeters of all object instances having that level.
+// The top level (carrying the top pass, the internals, the infill, the supports, the skirt / brim, the wipe tower and the custom G-code)
+// is process_layer(), which holds all the per print_z side effects. Only the side effects needed to emit a layer (before_layer_gcode and
+// the custom G-code of the print_z on the first emitted level, layer_gcode per level, the 1st to 2nd layer transition) are done here.
+LayerResult GCodeGenerator::process_sub_level(
+    const Print                             &print,
+    const ObjectsLayerToPrint               &layers,
+    const LayerTools                        &layer_tools,
+    const GCode::SmoothPathCaches           &smooth_path_caches,
+    const size_t                             level_idx,
+    const std::vector<const PrintInstance*> *ordering,
+    const size_t                             single_object_instance_idx)
+{
+    assert(! layers.empty());
+    assert(single_object_instance_idx == size_t(-1) || layers.size() == 1);
+
+    // The lower levels are buffered by the cooling buffer as sub-layers of the top level, which flushes.
+    LayerResult result { {}, 0, false, false, true };
+
+    const std::vector<double> level_zs = sub_level_zs(layers);
+    if (level_idx >= level_zs.size() || layer_tools.extruders.empty())
+        return result;
+    const double level_z = level_zs[level_idx];
+
+    // Pass of every object layer printed at this level and the first object layer having this level.
+    std::vector<int> pass_of_layer(layers.size(), -1);
+    const Layer *object_layer = nullptr;
+    for (size_t i = 0; i < layers.size(); ++ i) {
+        pass_of_layer[i] = sub_pass_at_z(layers[i].object_layer, level_z);
+        if (pass_of_layer[i] >= 0 && object_layer == nullptr)
+            object_layer = layers[i].object_layer;
+    }
+    if (object_layer == nullptr)
+        return result;
+    result.layer_id = object_layer->id();
+
+    std::vector<InstanceToPrint> instances_to_print;
+    for (const InstanceToPrint &instance : sort_print_object_instances(layers, ordering, single_object_instance_idx))
+        if (pass_of_layer[instance.object_layer_to_print_id] >= 0)
+            instances_to_print.push_back(instance);
+    if (instances_to_print.empty())
+        return result;
+
+    // The nozzle never goes below the previous layer: an interlaced support layer printed before this object layer may lie
+    // above the nominal level Z.
+    const double print_z = std::max(level_z + m_config.z_offset.value, double(m_last_layer_z));
+
+    m_config.apply(object_layer->object()->config(), true);
+    m_is_topmost_object_layer = false;
+    m_enable_loop_clipping = true;
+
+    // Height of this level: the distance to the previous level or to the top of the previous layer
+    // (the pass height if the level was lifted up to the previous layer).
+    const float height = static_cast<float>(print_z) - m_last_layer_z > float(EPSILON) ?
+        static_cast<float>(print_z) - m_last_layer_z : float(object_layer->height / double(object_layer->external_resolution()));
+
+    // Extract the loops of this level.
+    using GCode::ExtrusionOrder::SubPassExtrusions;
+    struct ExtruderSubPasses {
+        unsigned extruder_id;
+        std::vector<std::vector<SubPassExtrusions>> per_instance;
+    };
+    const SmoothPathGenerator smooth_path{
+        m_seam_placer, smooth_path_caches, m_scaled_resolution, m_config, m_enable_loop_clipping
+    };
+    std::optional<Point> previous_position{
+        this->last_position ? std::optional{scaled(this->point_to_gcode(*this->last_position))} : std::nullopt};
+    std::vector<ExtruderSubPasses> extrusions;
+    for (const unsigned extruder_id : layer_tools.extruders) {
+        ExtruderSubPasses extruder_sub_passes{extruder_id, {}};
+        for (const InstanceToPrint &instance : instances_to_print) {
+            const Layer *layer = layers[instance.object_layer_to_print_id].object_layer;
+            const Point &offset = instance.print_object.instances()[instance.instance_id].shift;
+            extruder_sub_passes.per_instance.push_back(GCode::ExtrusionOrder::extract_sub_pass_perimeters(
+                print, *layer, size_t(pass_of_layer[instance.object_layer_to_print_id]), layer_tools,
+                instance.instance_id, extruder_id, offset, previous_position, smooth_path));
+        }
+        extrusions.push_back(std::move(extruder_sub_passes));
+    }
+
+    // The first point of the level and its instance.
+    std::optional<Geometry::ArcWelder::Segment> first_segment;
+    const PrintInstance *first_instance = nullptr;
+    for (const ExtruderSubPasses &extruder_sub_passes : extrusions) {
+        for (size_t i = 0; i < extruder_sub_passes.per_instance.size() && ! first_segment; ++ i)
+            for (const SubPassExtrusions &sub_pass : extruder_sub_passes.per_instance[i])
+                for (const GCode::ExtrusionOrder::Perimeter &perimeter : sub_pass.perimeters)
+                    for (const GCode::SmoothPathElement &element : perimeter.smooth_path)
+                        if (! first_segment && ! element.path.empty()) {
+                            first_segment = element.path.front();
+                            const InstanceToPrint &instance = instances_to_print[i];
+                            first_instance = &instance.print_object.instances()[instance.instance_id];
+                            first_segment->point += first_instance->shift;
+                        }
+        if (first_segment)
+            break;
+    }
+    if (! first_segment)
+        return result;
+    const Vec3crd first_point{to_3d(first_segment->point, scaled(print_z + (first_segment->height_fraction - 1.0) * height))};
+    m_label_objects.update(first_instance);
+
+    std::string gcode;
+    assert(is_decimal_separator_point()); // for the sprintfs
+
+    gcode += ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    gcode += std::string(";Z:") + float_to_string_decimal_point(print_z) + "\n";
+    gcode += std::string(";") + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Height)
+        + float_to_string_decimal_point(height) + "\n";
+
+    const coordf_t previous_layer_z{m_last_layer_z};
+    m_last_layer_z = static_cast<float>(print_z);
+    m_max_layer_z  = std::max(m_max_layer_z, m_last_layer_z);
+    m_last_height = height;
+
+    // The before_layer_gcode and the custom G-code of the print_z are emitted by the first level only.
+    const bool first_level = ! m_sub_levels_emitted;
+    if (first_level && ! print.config().before_layer_gcode.value.empty()) {
+        DynamicConfig config;
+        config.set_key_value("layer_num",   new ConfigOptionInt(m_layer_index + 1));
+        config.set_key_value("layer_z",     new ConfigOptionFloat(print_z));
+        config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
+        gcode += this->placeholder_parser_process("before_layer_gcode",
+            print.config().before_layer_gcode.value, m_writer.extruder()->id(), &config)
+            + "\n";
+        m_temperature_manager.invalidate();
+    }
+
+    if (print.config().avoid_crossing_perimeters) {
+        this->m_avoid_crossing_perimeters.init_layer(*layers[instances_to_print.front().object_layer_to_print_id].layer());
+        this->set_origin(unscale(first_instance->shift));
+        const GCode::PrintObjectInstance next_instance{
+            &instances_to_print.front().print_object,
+            int(instances_to_print.front().instance_id)
+        };
+        if (m_current_instance != next_instance)
+            m_avoid_crossing_perimeters.use_external_mp_once = true;
+    }
+
+    gcode += this->change_layer(previous_layer_z, print_z, false, first_point.head<2>(), false); // this increases m_layer_index
+    m_layer = object_layer;
+    m_bridge_pass_z_offset = 0.;
+    if (this->line_distancer_is_required(layer_tools.extruders) && m_layer->lower_layer != nullptr)
+        m_travel_obstacle_tracker.init_layer(*object_layer, layers);
+
+    if (! print.config().layer_gcode.value.empty()) {
+        DynamicConfig config;
+        config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index));
+        config.set_key_value("layer_z",   new ConfigOptionFloat(print_z));
+        config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
+        gcode += this->placeholder_parser_process("layer_gcode",
+            print.config().layer_gcode.value, m_writer.extruder()->id(), &config)
+            + "\n";
+        m_temperature_manager.invalidate();
+    }
+
+    gcode += this->second_layer_transition(print, layer_tools.extruders.front());
+
+    if (this->config().avoid_crossing_curled_overhangs) {
+        m_avoid_crossing_curled_overhangs.clear();
+        for (const ObjectLayerToPrint &layer_to_print : layers) {
+            if (layer_to_print.object() == nullptr)
+                continue;
+            for (const auto &instance : layer_to_print.object()->instances()) {
+                m_avoid_crossing_curled_overhangs.add_obstacles(layer_to_print.object_layer, instance.shift);
+                m_avoid_crossing_curled_overhangs.add_obstacles(layer_to_print.support_layer, instance.shift);
+            }
+        }
+    }
+
+    // Custom G-code of this print_z that needs no specific extruder (the others are emitted by the top level).
+    if (first_level && single_object_instance_idx == size_t(-1) && layer_tools.custom_gcode != nullptr &&
+        int(layer_tools.extruder_needed_for_color_changer) - 1 == -1) {
+        const unsigned int first_extruder_id = layer_tools.extruders.front();
+        std::string custom_gcode = ProcessLayer::emit_custom_gcode_per_print_z(*this, *layer_tools.custom_gcode, m_writer.extruder()->id(), first_extruder_id, print.config());
+        if (layer_tools.custom_gcode->type == CustomGCode::ColorChange)
+            // Emitted immediately before the first extrusion (GH #2672).
+            m_pending_pre_extrusion_gcode = custom_gcode;
+        else
+            gcode += custom_gcode;
+        m_temperature_manager.invalidate(); // user gcode may contain M104/M109
+    }
+    m_sub_levels_emitted = true;
+
+    this->set_origin({0, 0});
+    this->m_moved_to_first_layer_point = false;
+
+    for (const ExtruderSubPasses &extruder_sub_passes : extrusions) {
+        bool any = false;
+        for (const std::vector<SubPassExtrusions> &per_instance : extruder_sub_passes.per_instance)
+            any |= ! GCode::ExtrusionOrder::is_empty(per_instance);
+        if (! any)
+            continue;
+
+        gcode += this->set_extruder(extruder_sub_passes.extruder_id, print_z);
+
+        if (! this->m_moved_to_first_layer_point) {
+            const Point shift{first_instance->shift};
+            this->set_origin(unscale(shift));
+            const GCode::PrintObjectInstance next_instance{
+                &instances_to_print.front().print_object,
+                int(instances_to_print.front().instance_id)
+            };
+            if (m_current_instance != next_instance)
+                m_avoid_crossing_perimeters.use_external_mp_once = true;
+            const double writer_z{m_writer.get_position().z()};
+            const double previous_z{writer_z <= std::numeric_limits<double>::epsilon() ? print_z : writer_z};
+            gcode += this->travel_to_first_position(first_point - to_3d(shift, 0), previous_z, ExtrusionRole::Mixed, [this]() {
+                if (m_writer.multiple_extruders)
+                    return std::string{""};
+                return m_label_objects.maybe_change_instance(m_writer);
+            });
+            this->set_origin({0, 0});
+        }
+
+        m_label_objects.update(first_instance);
+        for (size_t i = 0; i < instances_to_print.size(); ++ i) {
+            const InstanceToPrint &instance = instances_to_print[i];
+            const std::vector<SubPassExtrusions> &sub_passes = extruder_sub_passes.per_instance[i];
+            if (GCode::ExtrusionOrder::is_empty(sub_passes))
+                continue;
+            const ObjectLayerToPrint &layer_to_print = layers[instance.object_layer_to_print_id];
+            this->initialize_instance(instance, layer_to_print, i == 0);
+            m_object_layer_over_raft = layer_to_print.object_layer->id() > 0 &&
+                instance.print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
+            for (const SubPassExtrusions &sub_pass : sub_passes)
+                gcode += this->extrude_perimeters(*sub_pass.region, sub_pass.perimeters, instance);
+        }
+        this->set_origin(0.0, 0.0);
+    }
+
+    BOOST_LOG_TRIVIAL(trace) << "Exported external perimeter level " << level_idx << " of layer " << object_layer->id() << " print_z " << print_z;
+
+    result.gcode = std::move(gcode);
+    return result;
+}
+
 // In sequential mode, process_layer is called once per each object and its copy,
 // therefore layers will contain a single entry and single_object_instance_idx will point to the copy of the object.
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
@@ -2628,6 +3020,10 @@ LayerResult GCodeGenerator::process_layer(
     assert(! layers.empty());
     // Either printing all copies of all objects, or just a single copy of a single object.
     assert(single_object_instance_idx == size_t(-1) || layers.size() == 1);
+
+    // External perimeter resolution: lower levels of this print_z were emitted by process_sub_level() before this top level.
+    // The first of them carried the before_layer_gcode and the custom G-code of this print_z.
+    const bool levels_emitted = std::exchange(m_sub_levels_emitted, false);
 
     // First object, support and raft layer, if available.
     const Layer         *object_layer  = nullptr;
@@ -2721,7 +3117,7 @@ LayerResult GCodeGenerator::process_layer(
     m_last_height = height;
 
     // Set new layer - this will change Z and force a retraction if retract_layer_change is enabled.
-    if (!first_layer && ! print.config().before_layer_gcode.value.empty()) {
+    if (!first_layer && !levels_emitted && ! print.config().before_layer_gcode.value.empty()) {
         DynamicConfig config;
         config.set_key_value("layer_num",   new ConfigOptionInt(m_layer_index + 1));
         config.set_key_value("layer_z",     new ConfigOptionFloat(print_z));
@@ -2770,39 +3166,8 @@ LayerResult GCodeGenerator::process_layer(
         m_temperature_manager.invalidate();
     }
 
-    if (! first_layer && ! m_second_layer_things_done) {
-        // Transition from 1st to 2nd layer. Adjust nozzle temperatures as prescribed by the nozzle dependent
-        // first_layer_temperature vs. temperature settings.
-        for (const Extruder &extruder : m_writer.extruders()) {
-            if (print.config().single_extruder_multi_material.value || m_ooze_prevention.enable) {
-                // In single extruder multi material mode, set the temperature for the current extruder only.
-                // The same applies when ooze prevention is enabled.
-                if (extruder.id() != m_writer.extruder()->id())
-                    continue;
-            }
-            int temperature = print.config().temperature.get_at(extruder.id());
-            if (temperature > 0 && (temperature != print.config().first_layer_temperature.get_at(extruder.id())))
-                gcode += m_writer.set_temperature(temperature, false, extruder.id());
-        }
-        // The nozzle of the current extruder is now at its steady-state temperature (either because
-        // the command above was just emitted, or because it already equalled first_layer_temperature).
-        // Seed the offset system's cache with it: without this it would still hold whatever offset
-        // temperature the first layer ended on, and would then suppress the M104 needed to reach the
-        // same offset again on this layer.
-        if (const Extruder *current_extruder = m_writer.extruder(); current_extruder != nullptr)
-            m_temperature_manager.note_temperature_set(print.config().temperature.get_at(current_extruder->id()));
-
-        // Bed temperature for layers from the 2nd layer is based on the first printing
-        // extruder on the layer or on the extruded in bed_temperature_extruder.
-        const int  num_extruders            = print.config().nozzle_diameter.values.size();
-        const int  bed_temperature_extruder = print.config().bed_temperature_extruder;
-        const bool use_first_extruder       = bed_temperature_extruder <= 0 || bed_temperature_extruder > num_extruders;
-        const int  bed_temperature          = print.config().bed_temperature.get_at(use_first_extruder ? first_extruder_id : bed_temperature_extruder - 1);
-        gcode += m_writer.set_bed_temperature(bed_temperature);
-
-        // Mark the temperature transition from 1st to 2nd layer to be finished.
-        m_second_layer_things_done = true;
-    }
+    if (! first_layer)
+        gcode += this->second_layer_transition(print, first_extruder_id);
 
     if (this->config().avoid_crossing_curled_overhangs) {
         m_avoid_crossing_curled_overhangs.clear();
@@ -2819,7 +3184,7 @@ LayerResult GCodeGenerator::process_layer(
     const bool has_custom_gcode_to_emit     = single_object_instance_idx == size_t(-1) && layer_tools.custom_gcode != nullptr;
     const int  extruder_id_for_custom_gcode = int(layer_tools.extruder_needed_for_color_changer) - 1;
 
-    if (has_custom_gcode_to_emit && extruder_id_for_custom_gcode == -1) {
+    if (has_custom_gcode_to_emit && extruder_id_for_custom_gcode == -1 && !levels_emitted) {
         // Normal (non-sequential) print with some custom code without picking a specific extruder before it.
         // If we don't need to pick a specific extruder before the color change, we can just emit a custom g-code.
         // Otherwise, we will emit the g-code after picking the specific extruder.

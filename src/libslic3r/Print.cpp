@@ -217,6 +217,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
 
     std::vector<PrintStep> steps;
     std::vector<PrintObjectStep> osteps;
+    bool min_layer_height_changed = false;
     bool invalidated = false;
 
     for (const t_config_option_key &opt_key : opt_keys) {
@@ -312,6 +313,9 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             osteps.emplace_back(posInfill);
             osteps.emplace_back(posSupportMaterial);
             steps.emplace_back(psSkirtBrim);
+            if (opt_key == "min_layer_height")
+                // The external resolution factor of a layer depends on the minimum layer height; only objects using it are resliced.
+                min_layer_height_changed = true;
         } else if (opt_key == "avoid_crossing_curled_overhangs") {
             osteps.emplace_back(posEstimateCurledExtrusions);
         } else if (opt_key == "automatic_extrusion_widths") {
@@ -333,6 +337,10 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     for (PrintObjectStep ostep : osteps)
         for (PrintObject *object : m_objects)
             invalidated |= object->invalidate_step(ostep);
+    if (min_layer_height_changed)
+        for (PrintObject *object : m_objects)
+            if (object->config().external_perimeter_resolution.value > 1)
+                invalidated |= object->invalidate_step(posSlice);
     return invalidated;
 }
 
@@ -517,6 +525,17 @@ std::string Print::validate(std::vector<std::string>* warnings) const
         if (m_objects.front()->all_regions().size() > 1)
             return _u8L("The Spiral Vase option can only be used when printing single material objects.");
     }
+
+    for (const PrintObject *object : m_objects)
+        if (object->config().external_perimeter_resolution.value > 1) {
+            if (m_config.spiral_vase)
+                return _u8L("External perimeter resolution greater than 1 cannot be used in Spiral Vase mode.");
+            if (object->config().perimeter_generator.value != PerimeterGeneratorType::Arachne)
+                return _u8L("External perimeter resolution greater than 1 requires the Arachne perimeter generator.");
+            // The lower levels cannot host a tool change or a wipe tower purge (MVP).
+            if (this->extruders().size() > 1)
+                return _u8L("External perimeter resolution greater than 1 cannot be used with multiple extruders / materials.");
+        }
 
     if (m_config.machine_limits_usage == MachineLimitsUsage::EmitToGCode && m_config.gcode_flavor == gcfKlipper)
         return L("Machine limits cannot be emitted to G-Code when Klipper firmware flavor is used. "

@@ -25,6 +25,7 @@ namespace Slic3r {
 
 class Layer;
 class PrintObject;
+namespace PerimeterGenerator { struct Parameters; }
 
 using LayerPtrs = std::vector<Layer*>;
 class PrintRegion;
@@ -70,6 +71,10 @@ template class IndexRange<uint32_t>;
 using ExtrusionRange = IndexRange<uint32_t>;
 using ExPolygonRange = IndexRange<uint32_t>;
 
+// External perimeter resolution statistics per PrintObject (log only).
+void external_resolution_stats_reset(const PrintObject *object);
+void external_resolution_stats_log(const PrintObject *object, double perimeter_stage_seconds);
+
 class LayerRegion
 {
 public:
@@ -107,6 +112,12 @@ public:
     // ordered collection of extrusion paths/loops to build all perimeters
     // (this collection contains only ExtrusionEntityCollection objects)
     [[nodiscard]] const ExtrusionEntityCollection&  perimeters() const { return m_perimeters; }
+
+    // External perimeter resolution: raw slices at the k sub-planes of this layer (empty if k == 1), consumed only by make_perimeters().
+    [[nodiscard]] const std::vector<ExPolygons>&    sub_slices() const { return m_sub_slices; }
+    // Lower passes 0..k-2 of the external perimeters (flat: loops of all islands, in the order of the islands' external slots).
+    // The top pass k-1 replaces the normal external perimeters inside m_perimeters. Empty if k == 1 or all islands fell back.
+    [[nodiscard]] const std::vector<ExtrusionEntityCollection>& external_sub_passes() const { return m_external_sub_passes; }
 
     // ordered collection of extrusion paths to fill surfaces
     // (this collection contains only ExtrusionEntityCollection objects)
@@ -227,6 +238,18 @@ private:
     // ordered collection of extrusion paths to fill surfaces
     // (this collection contains only ExtrusionEntityCollection objects)
     ExtrusionEntityCollection   m_fills;
+
+    // External perimeter resolution (see Layer::external_resolution()).
+    // Raw slices at the k planes slice_z - h/2 + (j + 0.5) h / k, j = 0..k-1, filled by PrintObject::slice_volumes().
+    std::vector<ExPolygons>     m_sub_slices;
+    // Lower passes 0..k-2 of the external perimeters, produced by make_perimeters().
+    std::vector<ExtrusionEntityCollection> m_external_sub_passes;
+
+    // Generate the high-definition external perimeters of the islands of this region (k > 1) and replace the normal ones.
+    void    make_external_sub_passes(
+        const PerimeterGenerator::Parameters                   &params,
+        const SurfaceCollection                                &slices,
+        const std::vector<std::pair<ExtrusionRange, ExtrusionRange>> &perimeter_and_gapfill_ranges);
 
     // Set by PrintObject::combine_perimeters() on the lower (thin) layers of each combine group.
     // Reset to false at the top of combine_perimeters() before each run.

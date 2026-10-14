@@ -142,7 +142,30 @@ struct ExtruderExtrusions {
     std::optional<Point> wipe_tower_start;
 };
 
+// High-definition external perimeter loops of one region and one sub-pass (external perimeter resolution).
+struct SubPassExtrusions {
+    const PrintRegion *region;
+    std::vector<Perimeter> perimeters;
+};
+
 static constexpr const double min_gcode_segment_length = 0.002;
+
+// Chained loops of the lower external pass `pass` (0 .. k-2) of one object layer for one instance and one extruder.
+// The seam placer and scarf are not used for the sub-pass loops (the smooth path starts at the point closest to
+// the previous position).
+std::vector<SubPassExtrusions> extract_sub_pass_perimeters(
+    const Print &print,
+    const Layer &layer,
+    const std::size_t pass,
+    const LayerTools &layer_tools,
+    const std::size_t instance_id,
+    const unsigned extruder_id,
+    const Point &offset,
+    std::optional<Point> &previous_position,
+    const PathSmoothingFunction &smooth_path
+);
+
+bool is_empty(const std::vector<SubPassExtrusions> &extrusions);
 
 bool is_empty(const std::vector<SliceExtrusions> &extrusions);
 
