@@ -125,7 +125,7 @@ struct InstancePoint {
 
 using PathSmoothingResult = std::pair<GCode::SmoothPath, std::size_t>;
 using PathSmoothingFunction = std::function<PathSmoothingResult(
-    const Layer *, const PrintRegion *, const ExtrusionEntityReference &, const unsigned extruder_id, std::optional<InstancePoint> &previous_position
+    const Layer *, const PrintRegion *, const ExtrusionEntityReference &, const unsigned extruder_id, std::optional<InstancePoint> &previous_position, std::optional<std::size_t> sub_pass
 )>;
 
 struct BrimPath {
@@ -151,8 +151,8 @@ struct SubPassExtrusions {
 static constexpr const double min_gcode_segment_length = 0.002;
 
 // Chained loops of the lower external pass `pass` (0 .. k-2) of one object layer for one instance and one extruder.
-// The seam placer and scarf are not used for the sub-pass loops (the smooth path starts at the point closest to
-// the previous position).
+// The seam placer and scarf apply to the sub-pass loops as for the main loop (real layer and region are passed to
+// the smoothing function together with the pass index).
 std::vector<SubPassExtrusions> extract_sub_pass_perimeters(
     const Print &print,
     const Layer &layer,

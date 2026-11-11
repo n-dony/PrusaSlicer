@@ -593,7 +593,8 @@ int get_perimeter_count(const Layer *layer){
 }
 
 boost::variant<Point, Scarf::Scarf> Placer::place_seam(
-    const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos
+    const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos,
+    std::optional<std::size_t> /*sub_pass: reserved for the rotating-loop mode*/
 ) const {
     const PrintObject *po = layer->object();
     // Must not be called with supprot layer.

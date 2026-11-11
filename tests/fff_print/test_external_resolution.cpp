@@ -286,3 +286,155 @@ TEST_CASE("External resolution emits the lower passes as real levels of the laye
     for (size_t i = 1; i < hd.size(); ++ i)
         CHECK(hd[i].z > hd[i - 1].z);
 }
+
+namespace {
+
+struct SeamLevel {
+    double                z { 0. };
+    double                height { 0. };
+    bool                  has_ext { false };
+    bool                  only_ext { true };
+    bool                  has_start { false };
+    Vec2d                 start { 0., 0. };     // XY the nozzle was at when the first external perimeter extrusion began
+};
+
+// Per ;LAYER_CHANGE level: Z, HEIGHT, whether it has an external perimeter and the START XY of its first external extrusion.
+std::vector<SeamLevel> gcode_seam_levels(const std::string &gcode)
+{
+    std::vector<SeamLevel> levels;
+    std::istringstream     in(gcode);
+    std::string            line, role;
+    Vec2d                  pos(0., 0.);
+    bool                   expect_height = false;
+    auto                   coord = [](const std::string &l, char axis, double &out) {
+        const size_t p = l.find(std::string(" ") + axis);
+        if (p == std::string::npos)
+            return false;
+        out = std::stod(l.substr(p + 2));
+        return true;
+    };
+    while (std::getline(in, line)) {
+        if (line.rfind(";LAYER_CHANGE", 0) == 0) {
+            levels.emplace_back();
+            expect_height = true;
+            // The role is NOT reset: ;TYPE: is only re-emitted when the role changes, also across levels.
+            continue;
+        }
+        if (line.rfind(";TYPE:", 0) == 0) { role = line.substr(6); continue; }
+        if (line.rfind(";Z:", 0) == 0 && ! levels.empty()) { levels.back().z = std::stod(line.substr(3)); continue; }
+        if (expect_height && line.rfind(";HEIGHT:", 0) == 0 && ! levels.empty()) {
+            levels.back().height = std::stod(line.substr(8));
+            expect_height = false;
+            continue;
+        }
+        if (line.rfind("G1 ", 0) == 0 || line.rfind("G0 ", 0) == 0) {
+            const bool extrudes = line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find(" E-") == std::string::npos;
+            if (extrudes && ! levels.empty() && ! role.empty()) {
+                SeamLevel &lv = levels.back();
+                if (role == "External perimeter") {
+                    lv.has_ext = true;
+                    if (! lv.has_start) {
+                        lv.has_start = true;
+                        lv.start     = pos;
+                    }
+                } else
+                    lv.only_ext = false;
+            }
+            double v;
+            if (coord(line, 'X', v)) pos.x() = v;
+            if (coord(line, 'Y', v)) pos.y() = v;
+        }
+    }
+    return levels;
+}
+
+} // namespace
+
+TEST_CASE("External resolution sub-pass seams follow the top level seam in aligned, rear and random", "[ExternalResolution][Seam]")
+{
+    for (const char *mode : { "aligned", "rear", "random" }) {
+        const std::vector<SeamLevel> levels = gcode_seam_levels(Test::slice({ make_cylinder(30., 4.) }, {
+            { "skirts",                        0 },
+            { "perimeters",                    3 },
+            { "layer_height",                  0.3 },
+            { "first_layer_height",            0.3 },
+            { "perimeter_generator",           "arachne" },
+            { "external_perimeter_resolution", 3 },
+            { "seam_position",                 mode },
+            { "scarf_seam_length",             0 },
+            { "cooling",                       "0" }
+        }));
+        REQUIRE(levels.size() > 10);
+        size_t groups = 0, compared = 0;
+        // The first layer keeps k = 1; every other layer is 2 lower levels followed by the top level at print_z.
+        REQUIRE((levels.size() - 1) % 3 == 0);
+        for (size_t i = 1; i + 2 < levels.size(); i += 3) {
+            const SeamLevel &top = levels[i + 2];
+            ++ groups;
+            CHECK(levels[i].z     == Approx(top.z - 0.2).margin(1e-4));
+            CHECK(levels[i + 1].z == Approx(top.z - 0.1).margin(1e-4));
+            REQUIRE(top.has_start);
+            for (size_t j = 0; j < 2; ++ j) {
+                const SeamLevel &sub = levels[i + j];
+                REQUIRE(sub.has_start);
+                const double d = (sub.start - top.start).norm();
+                INFO("mode " << mode << " top z " << top.z << " dist " << d);
+                CHECK(d < 1.8);
+                ++ compared;
+            }
+        }
+        CHECK(groups >= 10);
+        CHECK(compared == 2 * groups);
+        if (std::string(mode) == "rear") {
+            // The rear seam sits on the max-Y side of the 30 mm radius circle, for every level.
+            double max_y = -1e9, min_y = 1e9;
+            for (const SeamLevel &lv : levels)
+                if (lv.has_start) { max_y = std::max(max_y, lv.start.y()); min_y = std::min(min_y, lv.start.y()); }
+            CHECK(max_y - min_y < 6.);
+            for (const SeamLevel &lv : levels)
+                if (lv.has_start)
+                    CHECK(lv.start.y() > max_y - 6.);
+        }
+    }
+}
+
+TEST_CASE("External resolution k=1 keeps the nominal layer height and layer count", "[ExternalResolution][Seam]")
+{
+    auto slice = [](const char *res) {
+        std::initializer_list<Slic3r::ConfigBase::SetDeserializeItem> items = {
+            { "skirts", 0 }, { "perimeters", 3 }, { "layer_height", 0.3 }, { "first_layer_height", 0.3 },
+            { "perimeter_generator", "arachne" }, { "seam_position", "aligned" }, { "cooling", "0" } };
+        DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config_with(items);
+        if (res)
+            cfg.set_deserialize_strict("external_perimeter_resolution", res);
+        return gcode_seam_levels(Test::slice({ make_cylinder(30., 4.) }, cfg));
+    };
+    const std::vector<SeamLevel> dflt = slice(nullptr);
+    const std::vector<SeamLevel> one  = slice("1");
+    REQUIRE(! dflt.empty());
+    CHECK(one.size() == dflt.size());
+    for (const SeamLevel &lv : one)
+        CHECK(lv.height == Approx(0.3).margin(1e-4));
+    for (const SeamLevel &lv : dflt)
+        CHECK(lv.height == Approx(0.3).margin(1e-4));
+}
+
+TEST_CASE("External resolution nearest mode slices and every sub-level has an external loop", "[ExternalResolution][Seam]")
+{
+    const std::string dbg_g = Test::slice({ make_cylinder(30., 4.) }, {
+        { "skirts",                        0 },
+        { "perimeters",                    3 },
+        { "layer_height",                  0.3 },
+        { "first_layer_height",            0.3 },
+        { "perimeter_generator",           "arachne" },
+        { "external_perimeter_resolution", 3 },
+        { "seam_position",                 "nearest" },
+        { "cooling",                       "0" }
+    });
+    const std::vector<SeamLevel> levels = gcode_seam_levels(dbg_g);
+    REQUIRE(levels.size() > 10);
+    for (const SeamLevel &lv : levels) {
+        INFO("z " << lv.z << " h " << lv.height << " only_ext " << lv.only_ext);
+        CHECK(lv.has_ext);
+    }
+}

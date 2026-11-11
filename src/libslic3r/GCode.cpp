@@ -2613,7 +2613,8 @@ struct SmoothPathGenerator
         const PrintRegion *region,
         const ExtrusionEntityReference &extrusion_reference,
         const unsigned extruder_id,
-        std::optional<InstancePoint> &previous_position
+        std::optional<InstancePoint> &previous_position,
+        std::optional<std::size_t> sub_pass
     ) {
         const ExtrusionEntity *extrusion_entity{&extrusion_reference.extrusion_entity()};
 
@@ -2633,7 +2634,7 @@ struct SmoothPathGenerator
             if (!config.spiral_vase && loop->role().is_perimeter() && layer != nullptr && region != nullptr) {
                 boost::variant<Point, Seams::Scarf::Scarf> seam{
                     this->seam_placer
-                        .place_seam(layer, region, *loop, extrusion_reference.flipped(), previous_point)};
+                        .place_seam(layer, region, *loop, extrusion_reference.flipped(), previous_point, sub_pass)};
                 std::tie(result, wipe_offset) = split_with_seam(
                     *loop, seam, extrusion_reference.flipped(), smooth_path_cache,
                     scaled_resolution, seam_point_merge_distance_threshold

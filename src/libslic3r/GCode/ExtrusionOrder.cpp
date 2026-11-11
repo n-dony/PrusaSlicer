@@ -130,7 +130,7 @@ std::vector<Perimeter> extract_perimeter_extrusions(
                     const bool is_hole = loop->is_clockwise();
                     reverse_loop = print.config().prefer_clockwise_movements ? !is_hole : is_hole;
                 }
-                auto [path, wipe_offset]{smooth_path(&layer, &region, ExtrusionEntityReference{*ee, reverse_loop}, extruder_id, last_position)};
+                auto [path, wipe_offset]{smooth_path(&layer, &region, ExtrusionEntityReference{*ee, reverse_loop}, extruder_id, last_position, std::nullopt)};
                 previous_position = get_gcode_point(last_position, offset);
                 if (!path.empty()) {
                     result.push_back(Perimeter{std::move(path), reverse_loop, ee, wipe_offset});
@@ -195,7 +195,7 @@ std::vector<InfillRange> extract_infill_ranges(
         std::vector<SmoothPath> paths;
         for (const ExtrusionEntityReference &extrusion_reference : sorted_extrusions) {
             std::optional<InstancePoint> last_position{get_instance_point(previous_position, offset)};
-            auto [path, _]{smooth_path(&layer, &region, extrusion_reference, extruder_id, last_position)};
+            auto [path, _]{smooth_path(&layer, &region, extrusion_reference, extruder_id, last_position, std::nullopt)};
             if (!path.empty()) {
                 paths.push_back(std::move(path));
             }
@@ -385,7 +385,7 @@ std::vector<SupportPath> get_support_extrusions(
                 if (collection != nullptr) {
                     for (const ExtrusionEntity * sub_entity : *collection) {
                         std::optional<InstancePoint> last_position{get_instance_point(previous_position, {0, 0})};
-                        auto [path, _]{smooth_path(nullptr, nullptr, {*sub_entity, entity_reference.flipped()}, extruder_id, last_position)};
+                        auto [path, _]{smooth_path(nullptr, nullptr, {*sub_entity, entity_reference.flipped()}, extruder_id, last_position, std::nullopt)};
                         if (!path.empty()) {
                             paths.push_back({std::move(path), is_interface});
                         }
@@ -393,7 +393,7 @@ std::vector<SupportPath> get_support_extrusions(
                     }
                 } else {
                     std::optional<InstancePoint> last_position{get_instance_point(previous_position, {0, 0})};
-                    auto [path, _]{smooth_path(nullptr, nullptr, entity_reference, extruder_id, last_position)};
+                    auto [path, _]{smooth_path(nullptr, nullptr, entity_reference, extruder_id, last_position, std::nullopt)};
                     if (!path.empty()) {
                         paths.push_back({std::move(path), is_interface});
                     }
@@ -558,8 +558,8 @@ std::vector<SubPassExtrusions> extract_sub_pass_perimeters(
             }
             const ExtrusionEntityReference ref{*ee, flipped};
             std::optional<InstancePoint> last_position{get_instance_point(previous_position, offset)};
-            // layer == nullptr and region == nullptr: no seam placement and no scarf for the sub-pass loops.
-            auto [path, wipe_offset]{smooth_path(nullptr, nullptr, ref, extruder_id, last_position)};
+            // Real layer and region: the sub-pass loop gets the same seam as the layer's main loop (and scarf).
+            auto [path, wipe_offset]{smooth_path(&layer, &region, ref, extruder_id, last_position, pass)};
             previous_position = get_gcode_point(last_position, offset);
             if (!path.empty())
                 perimeters.push_back(Perimeter{std::move(path), flipped, ee, wipe_offset});
@@ -630,7 +630,7 @@ std::vector<ExtruderExtrusions> get_extrusions(
                 }
                 const ExtrusionEntityReference entity{*print.skirt().entities[i], reverse};
                 std::optional<InstancePoint> last_position{get_instance_point(previous_position, {0, 0})};
-                auto [path, _]{smooth_path(nullptr, nullptr, entity, extruder_id, last_position)};
+                auto [path, _]{smooth_path(nullptr, nullptr, entity, extruder_id, last_position, std::nullopt)};
                 previous_position = get_gcode_point(last_position, {0, 0});
                 extruder_extrusions.skirt.emplace_back(i, std::move(path));
             }
@@ -649,7 +649,7 @@ std::vector<ExtruderExtrusions> get_extrusions(
                 const ExtrusionEntityReference entity_reference{*entity, reverse};
 
                 std::optional<InstancePoint> last_position{get_instance_point(previous_position, {0, 0})};
-                auto [path, _]{smooth_path(nullptr, nullptr, entity_reference, extruder_id, last_position)};
+                auto [path, _]{smooth_path(nullptr, nullptr, entity_reference, extruder_id, last_position, std::nullopt)};
                 previous_position = get_gcode_point(last_position, {0, 0});
                 extruder_extrusions.brim.push_back({std::move(path), is_loop});
             }

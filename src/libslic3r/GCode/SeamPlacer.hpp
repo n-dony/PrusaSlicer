@@ -55,7 +55,9 @@ public:
     );
 
     boost::variant<Point, Scarf::Scarf> place_seam(
-        const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos
+        const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos,
+        // Reserved for the rotating-loop mode; currently unused.
+        std::optional<std::size_t> sub_pass = std::nullopt
     ) const;
 
 private:
