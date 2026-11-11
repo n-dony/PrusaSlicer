@@ -6,6 +6,7 @@
 #ifndef libslic3r_SeamPlacer_hpp_
 #define libslic3r_SeamPlacer_hpp_
 
+#include <map>
 #include <optional>
 #include <vector>
 #include <memory>
@@ -38,10 +39,16 @@ struct Params
     double concave_visibility_modifier{};
     Perimeters::PerimeterParams perimeter;
     Slic3r::ModelInfo::Visibility::Params visibility;
-    bool staggered_inner_seams{};
 };
 
 std::ostream& operator<<(std::ostream& os, const Params& params);
+
+// Walks `arc` (unscaled mm, may be negative or exceed the loop length; wraps) along the closed chain
+// `lines` (consecutive, in order) from `start_point` lying on lines[start_line]. Returns the line index
+// and point reached. Used by the half-loop inner seam stagger.
+std::pair<std::size_t, Vec2d> point_at_arc_length(
+    const Linesf &lines, std::size_t start_line, const Vec2d &start_point, double arc
+);
 
 class Placer
 {
@@ -56,13 +63,16 @@ public:
 
     boost::variant<Point, Scarf::Scarf> place_seam(
         const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos,
-        // Reserved for the rotating-loop mode; currently unused.
+        // Rotating loop mode: virtual pass index of an external sub-pass.
         std::optional<std::size_t> sub_pass = std::nullopt
     ) const;
 
 private:
     Params params;
     ObjectSeams seams_per_object;
+    // Rotating loop mode with external resolution: [layer][pass][perimeter] seam choices, parallel to
+    // seams_per_object[layer] (the perimeter geometry is identical for all passes).
+    std::map<const PrintObject *, std::vector<std::vector<std::vector<SeamChoice>>>> rotating_pass_seams;
     ObjectLayerPerimeters perimeters_per_layer;
 };
 

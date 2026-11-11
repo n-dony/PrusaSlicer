@@ -139,8 +139,14 @@ enum SupportMaterialInterfacePattern {
     smipAuto, smipRectilinear, smipConcentric,
 };
 
+enum SeamRotationDefineBy { srdCount, srdDegrees };
+enum SeamRotationOrder { sroSpread, sroSequential };
+enum SeamRotationHoleOffset { srhoOpposite, srhoSame };
+enum SeamRotationSublayers { srsGroup, srsLoop };
+enum StaggeredInnerSeamsMode { sismDepth, sismHalfLoop };
+
 enum SeamPosition {
-    spRandom, spNearest, spAligned, spRear
+    spRandom, spNearest, spAligned, spRear, spRotating
 };
 
 enum class ScarfSeamPlacement {
@@ -337,6 +343,11 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialStyle)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialInterfacePattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamPosition)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamRotationDefineBy)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamRotationOrder)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamRotationHoleOffset)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamRotationSublayers)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(StaggeredInnerSeamsMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ScarfSeamPlacement)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SLADisplayOrientation)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SLAPillarConnectionMode)
@@ -451,14 +462,40 @@ public:
     // Both opt_key and value may be modified by handle_legacy().
     // If the opt_key is no more valid in this version of Slic3r, opt_key is cleared by handle_legacy().
     // handle_legacy() is called internally by set_deserialize().
+    // Renamed options: when both the old and the new key are present in one load, the NEW key wins
+    // regardless of the order in which they are read (tracked by the mutable flags below, reset in
+    // handle_legacy_composite() at the end of each whole-config load).
     void                handle_legacy(t_config_option_key &opt_key, std::string &value) const override
-        { PrintConfigDef::handle_legacy(opt_key, value); }
+    {
+        const bool old_sublayers = opt_key == "external_perimeter_resolution";
+        const bool old_ip_last   = opt_key == "swap_first_int_w_ext_perimeter";
+        PrintConfigDef::handle_legacy(opt_key, value);
+        if (opt_key == "external_perimeter_sublayers") {
+            if (! old_sublayers)
+                m_seen_new_sublayers = true;
+            else if (m_seen_new_sublayers)
+                opt_key.clear(); // new key already loaded: ignore the stale legacy value
+        } else if (opt_key == "first_internal_perimeter_last") {
+            if (! old_ip_last)
+                m_seen_new_ip_last = true;
+            else if (m_seen_new_ip_last)
+                opt_key.clear();
+        }
+    }
 
     // Called after a config is loaded as a whole.
     // Perform composite conversions, for example merging multiple keys into one key.
     // For conversion of single options, the handle_legacy() method above is called.
     void                handle_legacy_composite() override
-        { PrintConfigDef::handle_legacy_composite(*this); }
+    {
+        m_seen_new_sublayers = false;
+        m_seen_new_ip_last   = false;
+        PrintConfigDef::handle_legacy_composite(*this);
+    }
+
+private:
+    mutable bool        m_seen_new_sublayers { false };
+    mutable bool        m_seen_new_ip_last   { false };
 };
 
 // This vector containes list of parameters for preview of tilt profiles
@@ -712,6 +749,15 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                 raft_layers))
     ((ConfigOptionEnum<SeamPosition>,  seam_position))
     ((ConfigOptionBool,                staggered_inner_seams))
+    ((ConfigOptionEnum<StaggeredInnerSeamsMode>, staggered_inner_seams_mode))
+    ((ConfigOptionEnum<SeamRotationDefineBy>, seam_rotation_define_by))
+    ((ConfigOptionInt,                 seam_rotation_count))
+    ((ConfigOptionFloat,               seam_rotation_step))
+    ((ConfigOptionFloat,               seam_rotation_start))
+    ((ConfigOptionEnum<SeamRotationOrder>, seam_rotation_order))
+    ((ConfigOptionFloat,               seam_rotation_drift))
+    ((ConfigOptionEnum<SeamRotationHoleOffset>, seam_rotation_hole_offset))
+    ((ConfigOptionEnum<SeamRotationSublayers>, seam_rotation_sublayers))
 //  ((ConfigOptionFloat,               seam_preferred_direction))
 //  ((ConfigOptionFloat,               seam_preferred_direction_jitter))
     ((ConfigOptionFloat,               slice_closing_radius))
@@ -766,7 +812,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // The rest
     ((ConfigOptionBool,                thick_bridges))
     ((ConfigOptionEnum<TwoPassBridgeScope>, two_pass_bridge_scope))
-    ((ConfigOptionInt,                 external_perimeter_resolution))
+    ((ConfigOptionInt,                 external_perimeter_sublayers))
     ((ConfigOptionFloat,               xy_size_compensation))
     ((ConfigOptionBool,                wipe_into_objects))
 
@@ -805,7 +851,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent,       overhang_speed_2))
     ((ConfigOptionFloatOrPercent,       overhang_speed_3))
     ((ConfigOptionBool,                 external_perimeters_first))
-    ((ConfigOptionBool,                 swap_first_int_w_ext_perimeter))
+    ((ConfigOptionBool,                 first_internal_perimeter_last))
     ((ConfigOptionBool,                 reverse_internal_perimeters))
     ((ConfigOptionInt,                  reverse_internal_perimeters_at))
     ((ConfigOptionBool,                 extra_perimeters))

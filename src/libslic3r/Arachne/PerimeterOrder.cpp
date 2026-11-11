@@ -218,7 +218,7 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
 static PerimeterExtrusions extract_ordered_perimeter_extrusions(
     const PerimeterExtrusions &sorted_perimeter_extrusions,
     const bool external_perimeters_first,
-    const bool swap_first_int_w_ext_perimeter,
+    const bool first_internal_perimeter_last,
     const bool reverse_internal_perimeters,
     const int  reverse_internal_perimeters_at) {
     // Extrusions are ordered inside each group.
@@ -314,7 +314,7 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
         //   Holes (inside-out, external_perimeters_first=false): after std::reverse, ext is last.
         //             Moving inset_idx==1 to the END puts it right after ext — correct.
         //             → same END behaviour as contours.
-        if (swap_first_int_w_ext_perimeter) {
+        if (first_internal_perimeter_last) {
             const bool is_hole = !grouped_extrusions.back().external_perimeter_extrusion->is_contour();
             if (is_hole && external_perimeters_first) {
                 // Hole outside-in: inset_idx==1 moves to FRONT, printing just before ext.
@@ -346,14 +346,14 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(
 PerimeterExtrusions ordered_perimeter_extrusions(
     const Perimeters &perimeters,
     const bool external_perimeters_first,
-    const bool swap_first_int_w_ext_perimeter,
+    const bool first_internal_perimeter_last,
     const bool reverse_internal_perimeters,
     const int  reverse_internal_perimeters_at) {
     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
     return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first,
-                                                 swap_first_int_w_ext_perimeter, reverse_internal_perimeters, reverse_internal_perimeters_at);
+                                                 first_internal_perimeter_last, reverse_internal_perimeters, reverse_internal_perimeters_at);
 }
 
 } // namespace Slic3r::Arachne::PerimeterOrder

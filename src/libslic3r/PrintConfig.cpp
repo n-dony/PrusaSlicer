@@ -197,10 +197,41 @@ static const t_config_enum_values s_keys_map_SeamPosition {
     { "random",         spRandom },
     { "nearest",        spNearest },
     { "aligned",        spAligned },
-    { "rear",           spRear }
+    { "rear",           spRear },
+    { "rotating",       spRotating }
 };
 
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SeamPosition)
+
+static const t_config_enum_values s_keys_map_SeamRotationDefineBy {
+    { "count",          srdCount },
+    { "degrees",        srdDegrees }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SeamRotationDefineBy)
+
+static const t_config_enum_values s_keys_map_SeamRotationOrder {
+    { "spread",         sroSpread },
+    { "sequential",     sroSequential }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SeamRotationOrder)
+
+static const t_config_enum_values s_keys_map_SeamRotationHoleOffset {
+    { "opposite",       srhoOpposite },
+    { "same",           srhoSame }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SeamRotationHoleOffset)
+
+static const t_config_enum_values s_keys_map_SeamRotationSublayers {
+    { "group",          srsGroup },
+    { "loop",           srsLoop }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SeamRotationSublayers)
+
+static const t_config_enum_values s_keys_map_StaggeredInnerSeamsMode {
+    { "depth",          sismDepth },
+    { "half_loop",      sismHalfLoop }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(StaggeredInnerSeamsMode)
 
 static const t_config_enum_values s_keys_map_ScarfSeamPlacement {
     { "nowhere",        static_cast<int>(ScarfSeamPlacement::nowhere) },
@@ -814,8 +845,8 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloat(60));
 
     def = this->add("bridge_anchor_length", coFloat);
-    def->label = L("Bridge anchor length");
-    def->category = L("Speed");
+    def->label = L("Two-pass bridge anchor length");
+    def->category = L("Layers and perimeters");
     def->tooltip = L("[Experimental] Extend the two-pass bridge perimeter passes by this length into "
                      "the adjacent perimeter to improve adhesion at bridge start/end points. Applies "
                      "only to perimeter extrusions (two-pass bridge scope), never to bridge infill. "
@@ -1039,16 +1070,15 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionEnums<CoolingSlowdownLogicType>{ CoolingSlowdownLogicType::UniformCooling });
 
     def = this->add("cooling_combine_logic", coEnums);
-    def->label = L("Combine layers cooling logic");
-    def->tooltip = L("Controls how the cooling buffer handles combine_perimeters and combine_infill layer groups. "
-                     "'Group time' (default) evaluates the whole N-layer group's total print time against the minimum layer time threshold — "
-                     "no slowdown fires if the group total already exceeds the threshold. "
-                     "'Top layer ceiling' calculates the per-feature speed ceiling from the top (combined) layer alone and propagates it to sub-layers, "
-                     "ensuring the top layer reaches exactly the minimum layer time and sub-layers run at the same per-feature speed.");
+    def->label = L("Cooling of combined layers");
+    def->tooltip = L("How minimum layer time is enforced on layers merged by combine perimeters / combine infill. "
+                     "'Whole group time': the merged group's total print time must reach the minimum; no slowdown if it already does. "
+                     "'Top layer sets speed': the per-feature speed limit is computed on the top layer and applied to the layers beneath it.");
     def->set_enum<CoolingCombineLogicType>({
-        { "group_time",        L("Group time")        },
-        { "top_layer_ceiling", L("Top layer ceiling") },
+        { "group_time",        L("Whole group time")     },
+        { "top_layer_ceiling", L("Top layer sets speed") },
     });
+    def->mode = comExpert;
     def->set_default_value(new ConfigOptionEnums<CoolingCombineLogicType>{ CoolingCombineLogicType::GroupTime });
 
     def = this->add("cooling_perimeter_transition_distance", coFloats);
@@ -1240,13 +1270,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(100, true));
 
-    def = this->add("swap_first_int_w_ext_perimeter", coBool);
-    def->label = L("Exchange the first internal perimeters with their external perimeter");
+    def = this->add("first_internal_perimeter_last", coBool);
+    def->label = L("Print first internal perimeter last");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print the first internal perimeter last within its group, after every other perimeter "
-                   "including the external one, instead of right after the external perimeter as usual. "
-                   "Sometimes called \"groove injection\": letting the external wall set before the first "
-                   "internal wall bonds to it can improve the surface finish at that boundary.");
+    def->tooltip = L("Print the first internal perimeter last within its group. With the default inside-out order it prints "
+                   "right after the external perimeter, so the external wall sets before the first internal wall bonds to it "
+                   "(\"groove injection\"), which can improve the surface finish at that boundary. With \"External perimeters first\" "
+                   "it prints after all the deeper walls instead.");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
  
@@ -2180,9 +2210,9 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionBool(0));
 
     def = this->add("high_def_print", coBool);
-    def->label = L("High definition print");
-    def->tooltip = L("Enables a quality preset: 3+ perimeters, swap first-internal with external order, combine internal perimeters and infill every 2 layers, and scarf seam on contours.");
-    def->mode = comSimple;
+    def->label = L("High definition preset");
+    def->tooltip = L("Applies a quality-oriented set of values once: at least 3 perimeters, first internal perimeter printed last, internal perimeters and infill combined every 2 layers, scarf seam on contours. Unchecking does not restore the previous values.");
+    def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("infill_acceleration", coFloat);
@@ -2250,7 +2280,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionInt(1));
 
     def = this->add("first_internal_perimeter_every_layers", coInt);
-    def->label = L("First internal perimeter every N layers");
+    def->label = L("Combine first internal perimeter every");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Print first internal perimeters only every N layers. Default 1 (every layer). Set >= 2 to combine the perimeters of N layers into thicker ones.");
     def->sidetext = L("layers");
@@ -2259,7 +2289,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionInt(1));
 
     def = this->add("second_internal_perimeter_every_layers", coInt);
-    def->label = L("2nd+ internal perimeters every N layers");
+    def->label = L("Combine 2nd and deeper perimeters every");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Print second and all deeper internal perimeters (depth ≥ 2) only every N layers. Default 1 (every layer).");
     def->sidetext = L("layers");
@@ -2279,7 +2309,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("automatic_internal_perimeters_combination_max_layer_height", coFloatOrPercent);
-    def->label = L("Automatic internal perimeters combination - Max layer height");
+    def->label = L("Max combined layer height");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Maximum layer height for combining internal perimeters when automatic internal perimeters combination is enabled. "
                      "Maximum layer height could be specified either as an absolute in millimeters value or as a percentage of nozzle diameter. "
@@ -2290,7 +2320,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloatOrPercent(100., true));
 
     def = this->add("combine_perimeters_max_shift", coFloatOrPercent);
-    def->label = L("Combine perimeters max shift");
+    def->label = L("Combine perimeters: max shift");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Maximum horizontal shift between an internal perimeter on a thin layer and the thicker bead that replaces it, in mm or as a percentage of the perimeter extrusion width. "
                      "Each loop is compared with the matching loop of the group's top layer; loops that shift more are printed normally on their own layers. "
@@ -2298,7 +2328,7 @@ void PrintConfigDef::init_fff_params()
                      "Lower values keep more of the wall bonded, higher values combine more.");
     def->sidetext = L("mm or %");
     def->min = 0;
-    def->mode = comExpert;
+    def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(20., true));
 
     def = this->add("combine_perimeters_method", coEnum);
@@ -2306,36 +2336,36 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Layers and Perimeters");
     def->tooltip = L("How loops of the thin layers are matched with the loops of the group's top layer. "
                      "Whole loops only: a loop is either fully combined or left untouched. "
-                     "Legacy: the previous algorithm, union mask of all same-role centrelines, region-wide all-or-nothing (kept for comparison). "
-                     "Legacy mask v2: same acceptance test as the legacy mask method, but combined beads keep per-path widths and conserve the extruded volume. "
-                     "Legacy mask v3: mask-based like the legacy method but evaluated per loop: mixed bridge loops are skipped individually, a bad stretch of one loop no longer blocks the others, widths from the loops' own paths. "
-                     "Whole loops, strict: one-to-one loop identity, worst-sample shift within the maximum shift; lowest coverage. "
-                     "Whole loops, tolerant: coverage-based acceptance (90th percentile shift within the maximum shift, worst sample within half a spacing). "
-                     "Arcs (partial loops): per-sample coverage; only the arcs that are covered on every thin layer are combined, the rest of a loop stays as it is (breaks the whole-loop rule; kept for comparison).");
+                     "Legacy A: the previous algorithm, union mask of all same-role centrelines, region-wide all-or-nothing (kept for comparison). "
+                     "Legacy B: same acceptance test as Legacy A, but combined beads keep per-path widths and conserve the extruded volume. "
+                     "Legacy C: mask-based like Legacy A but evaluated per loop: mixed bridge loops are skipped individually, a bad stretch of one loop no longer blocks the others, widths from the loops' own paths. "
+                     "Whole loops (strict): one-to-one loop identity, worst-sample shift within the maximum shift; lowest coverage. "
+                     "Whole loops (tolerant): coverage-based acceptance (90th percentile shift within the maximum shift, worst sample within half a spacing). "
+                     "Partial arcs: per-sample coverage; only the arcs that are covered on every thin layer are combined, the rest of a loop stays as it is (breaks the whole-loop rule; kept for comparison).");
     def->set_enum<CombinePerimetersMethod>({
-        { "legacy_mask",   L("Legacy (union mask, region-wide)") },
-        { "legacy_mask_v2", L("Legacy mask v2 (per-path flow)")  },
-        { "legacy_mask_v3", L("Legacy mask v3 (per-loop masks)") },
-        { "loop_strict",   L("Whole loops, strict")              },
-        { "loop_tolerant", L("Whole loops, tolerant")            },
-        { "arc_coverage",  L("Arcs (partial loops)")             },
+        { "legacy_mask",   L("Legacy A (union mask, region-wide)") },
+        { "legacy_mask_v2", L("Legacy B (per-path flow)") },
+        { "legacy_mask_v3", L("Legacy C (per-loop masks)") },
+        { "loop_strict",   L("Whole loops (strict)") },
+        { "loop_tolerant", L("Whole loops (tolerant)") },
+        { "arc_coverage",  L("Partial arcs") },
     });
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionEnum<CombinePerimetersMethod>(cpmLoopTolerant));
 
     def = this->add("combine_perimeters_atomic_fragments", coBool);
-    def->label = L("Combine wall fragments together");
+    def->label = L("Keep wall fragments together (all or nothing)");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("When enabled, the open fragments into which Arachne splits one wall line (same island and same perimeter depth) "
                      "are combined all together or not at all, so a wall line is never partly combined. Closed loops are always whole. "
                      "Reduces how much is combined where one fragment of a wall does not match. "
-                     "Applies to the whole-loop methods (strict, tolerant, legacy mask v3); the legacy mask methods are already "
-                     "region-wide and arc coverage deliberately splits loops.");
+                     "Applies to the whole-loop methods (strict, tolerant, Legacy C); Legacy A and B are already "
+                     "region-wide and Partial arcs deliberately splits loops.");
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("combine_perimeters_min_arc", coFloat);
-    def->label = L("Combine perimeters minimum arc");
+    def->label = L("Combine perimeters: min arc length");
     def->category = L("Layers and Perimeters");
     def->tooltip = L("Minimum length of a partial-loop arc that may be combined (arc coverage method only).");
     def->sidetext = L("mm");
@@ -3328,12 +3358,16 @@ void PrintConfigDef::init_fff_params()
     def = this->add("seam_position", coEnum);
     def->label = L("Seam position");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Position of perimeters starting points.");
+    def->tooltip = L("Position of perimeters starting points.\n"
+                     "Rotating: the external seam of each layer moves to the next of several positions around the object "
+                     "(see the Seam rotation options). Fork feature: other builds do not know this value.\n"
+                     "Note: multiple seam positions multiply the number of visible seam-start defects.");
     def->set_enum<SeamPosition>({
         { "random",     L("Random") },
         { "nearest",    L("Nearest") },
         { "aligned",    L("Aligned") },
-        { "rear",       L("Rear") }
+        { "rear",       L("Rear") },
+        { "rotating",   L("Rotating") }
     });
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionEnum<SeamPosition>(spAligned));
@@ -3344,6 +3378,112 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("This option causes the inner seams to be shifted backwards based on their depth, forming a zigzag pattern.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("staggered_inner_seams_mode", coEnum);
+    def->label = L("Staggered inner seams mode");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("How inner seams are staggered when 'Staggered inner seams' is enabled.\n"
+                     "Depth: shift each inner seam backwards based on its depth (zigzag).\n"
+                     "Half loop: alternate inner seams between the external seam position and the opposite side "
+                     "(half a loop away), by perimeter depth parity.");
+    def->set_enum<StaggeredInnerSeamsMode>({
+        { "depth",      L("Depth") },
+        { "half_loop",  L("Opposite side (half loop)") }
+    });
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<StaggeredInnerSeamsMode>(sismDepth));
+
+    def = this->add("seam_rotation_define_by", coEnum);
+    def->label = L("Seam rotation defined by");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Define the rotating seam by a number of positions (count) or by an angular step (degrees).");
+    def->set_enum<SeamRotationDefineBy>({
+        { "count",      L("Number of positions") },
+        { "degrees",    L("Angle step") }
+    });
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SeamRotationDefineBy>(srdCount));
+
+    def = this->add("seam_rotation_count", coInt);
+    def->label = L("Number of seam positions");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Number of seam positions (lanes) around the object. Each seam layer uses the next position. "
+                     "Note: multiple seam positions multiply the number of visible seam-start defects.");
+    def->min = 1;
+    def->max = 36;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(4));
+
+    def = this->add("seam_rotation_step", coFloat);
+    def->label = L("Angle between seam positions");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Angular step between consecutive seam layers when defined by degrees. "
+                     "Angles are measured in the object frame, counter-clockwise from +X.");
+    def->sidetext = L("°");
+    def->min = 0.01;
+    def->max = 359.99;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(90.));
+
+    def = this->add("seam_rotation_start", coFloat);
+    def->label = L("Seam rotation start angle");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Angle of the seam on the first seam layer, in the object frame, counter-clockwise from +X.");
+    def->sidetext = L("°");
+    def->min = 0;
+    def->max = 360;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("seam_rotation_order", coEnum);
+    def->label = L("Seam rotation order");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Order in which the seam positions are visited (count mode).\n"
+                     "Spread: consecutive layers use positions far apart from each other.\n"
+                     "Sequential: consecutive layers use neighbouring positions.");
+    def->set_enum<SeamRotationOrder>({
+        { "spread",     L("Spread") },
+        { "sequential", L("Sequential") }
+    });
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SeamRotationOrder>(sroSpread));
+
+    def = this->add("seam_rotation_drift", coFloat);
+    def->label = L("Seam rotation drift");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Extra angle added per seam layer. Zero keeps the seams in vertical columns; "
+                     "a non-zero value makes them drift around the object (lanes).");
+    def->sidetext = L("°/layer");
+    def->min = -45;
+    def->max = 45;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("seam_rotation_hole_offset", coEnum);
+    def->label = L("Seam on holes");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Angle of the seam on hole perimeters relative to the outer contour angle.\n"
+                     "Note: on thin walls (3 loops or fewer) with holes and half-loop staggered inner seams, some seam pair "
+                     "is radially adjacent whichever offset is used.");
+    def->set_enum<SeamRotationHoleOffset>({
+        { "opposite",   L("Opposite side") },
+        { "same",       L("Same side") }
+    });
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SeamRotationHoleOffset>(srhoOpposite));
+
+    def = this->add("seam_rotation_sublayers", coEnum);
+    def->label = L("Advance seam per");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("How combined (merged) perimeter sub-layers count as seam layers.\n"
+                     "Group: a whole combine group counts as one seam layer.\n"
+                     "Loop: every loop counts as its own seam layer.");
+    def->set_enum<SeamRotationSublayers>({
+        { "group",      L("Combine group") },
+        { "loop",       L("Loop") }
+    });
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SeamRotationSublayers>(srsGroup));
 
     def = this->add("scarf_seam_placement", coEnum);
     def->label = L("Scarf joint placement");
@@ -4108,33 +4248,30 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionBool(true));
 
     def = this->add("two_pass_bridge_scope", coEnum);
-    def->label = L("Two-pass bridge scope");
+    def->label = L("Two-pass bridges");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("[Experimental] Re-extrude bridge features in two passes to improve quality. "
-                      "BridgeInfillOnly applies two-pass to bridge infill only (legacy behavior). "
-                      "BridgeInfillAndPerims also applies two-pass to overhang perimeters (classic and Arachne perimeter modes). "
-                      "CrosshatchInfillOnly prints the second bridge infill pass perpendicular to the first, over its footprint. "
-                      "CrosshatchInfillAndPerims combines crosshatch infill with same-angle two-pass perimeters. "
-                      "Note: no dwell time between passes — each pass immediately follows the previous. "
-                      "Two-pass is skipped (normal single-pass bridge) on layers where half the layer height "
-                      "is below the minimum layer height of the extruder printing the bridge.");
+    def->tooltip = L("Print bridges as two half-height passes (foundation, then finish). "
+                     "'Bridge infill': infill only. '+ perimeters': also bridging perimeters. "
+                     "'Crosshatch': second infill pass runs perpendicular to the first. "
+                     "No dwell between passes. Falls back to one pass where half the layer height is below the extruder's minimum layer height. "
+                     "Experimental.");
     def->set_enum<TwoPassBridgeScope>({
-        { "disabled",                 L("Disabled")                  },
-        { "bridge_infill_only",       L("Bridge infill only")        },
+        { "disabled",                 L("Off")                       },
+        { "bridge_infill_only",       L("Bridge infill")            },
         { "bridge_infill_and_perims", L("Bridge infill + perimeters") },
-        { "crosshatch_infill_only",       L("Crosshatch infill only")        },
+        { "crosshatch_infill_only",       L("Crosshatch infill")        },
         { "crosshatch_infill_and_perims", L("Crosshatch infill + perimeters") },
     });
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<TwoPassBridgeScope>(TwoPassBridgeScope::Disabled));
 
-    def = this->add("external_perimeter_resolution", coInt);
-    def->label = L("External perimeter resolution");
+    def = this->add("external_perimeter_sublayers", coInt);
+    def->label = L("External perimeter sub-layers");
     def->category = L("Layers and Perimeters");
-    def->tooltip = L("Print the external perimeter as N stacked passes of layer_height/N, each generated from a slice taken at the middle of its own pass, "
-                     "while internal perimeters and infill print once per layer at the full height. "
-                     "N is reduced per layer so that the pass height stays at or above the perimeter extruder's minimum layer height.");
-    def->sidetext = L("passes");
+    def->tooltip = L("Print the external perimeter in N thinner sub-layers per layer (each layer_height/N, sliced at its own height) "
+                     "while internal perimeters and infill keep the full layer height. Gives a fine outer surface on a thick-layer print. "
+                     "Arachne perimeters only. N is reduced where layer_height/N would fall below the extruder's minimum layer height. 1 = off.");
+    def->sidetext = L("per layer");
     def->min = 1;
     def->max = 8;
     def->mode = comExpert;
@@ -4381,18 +4518,6 @@ void PrintConfigDef::init_fff_params()
                      "Set to 0 to use the one that is available (non-soluble would be preferred).");
     def->min = 0;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(0));
-
-    def = this->add("solid_infill_every_layers", coInt);
-    def->label = L("Solid infill every");
-    def->category = L("Infill");
-    def->tooltip = L("This feature allows to force a solid layer every given number of layers. "
-                   "Zero to disable. You can set this to any value (for example 9999); "
-                   "Slic3r will automatically choose the maximum possible number of layers "
-                   "to combine according to nozzle diameter and layer height.");
-    def->sidetext = L("layers");
-    def->min = 0;
-    def->mode = comExpert;
     def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("xy_size_compensation", coFloat);
@@ -5746,7 +5871,11 @@ static std::set<std::string> PrintConfigDef_ignore = {
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
     // handle legacy options
-    if (opt_key == "extrusion_width_ratio" || opt_key == "bottom_layer_speed_ratio"
+    if (opt_key == "external_perimeter_resolution") {
+        opt_key = "external_perimeter_sublayers";
+    } else if (opt_key == "swap_first_int_w_ext_perimeter") {
+        opt_key = "first_internal_perimeter_last";
+    } else if (opt_key == "extrusion_width_ratio" || opt_key == "bottom_layer_speed_ratio"
         || opt_key == "first_layer_height_ratio") {
         boost::replace_first(opt_key, "_ratio", "");
         if (opt_key == "bottom_layer_speed") opt_key = "first_layer_speed";

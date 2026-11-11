@@ -738,7 +738,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "perimeter_extrusion_width"
             || opt_key == "infill_overlap"
             || opt_key == "external_perimeters_first"
-            || opt_key == "swap_first_int_w_ext_perimeter"
+            || opt_key == "first_internal_perimeter_last"
             || opt_key == "reverse_internal_perimeters"
             || opt_key == "reverse_internal_perimeters_at"
             || opt_key == "arc_fitting"
@@ -782,7 +782,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "raft_layers"
             || opt_key == "raft_contact_distance"
             || opt_key == "slice_closing_radius"
-            || opt_key == "external_perimeter_resolution"
+            || opt_key == "external_perimeter_sublayers"
             || opt_key == "slicing_mode"
             || opt_key == "interlocking_beam"
             || opt_key == "interlocking_orientation"
@@ -914,7 +914,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "thin_walls"
             || opt_key == "thick_bridges") {
             // The per-layer external resolution factor depends on the minimum layer height of the perimeter extruder.
-            if (opt_key == "perimeter_extruder" && m_config.external_perimeter_resolution.value > 1)
+            if (opt_key == "perimeter_extruder" && m_config.external_perimeter_sublayers.value > 1)
                 steps.emplace_back(posSlice);
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
@@ -940,6 +940,16 @@ bool PrintObject::invalidate_state_by_config_options(
             steps.emplace_back(posSlice);
         } else if (
                opt_key == "seam_position"
+            || opt_key == "staggered_inner_seams"
+            || opt_key == "staggered_inner_seams_mode"
+            || opt_key == "seam_rotation_define_by"
+            || opt_key == "seam_rotation_count"
+            || opt_key == "seam_rotation_step"
+            || opt_key == "seam_rotation_start"
+            || opt_key == "seam_rotation_order"
+            || opt_key == "seam_rotation_drift"
+            || opt_key == "seam_rotation_hole_offset"
+            || opt_key == "seam_rotation_sublayers"
             || opt_key == "scarf_seam_placement"
             || opt_key == "scarf_seam_only_on_smooth"
             || opt_key == "scarf_seam_start_height"

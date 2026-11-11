@@ -203,6 +203,8 @@ set(SLIC3R_SOURCES
     GCode/SeamAligned.hpp
     GCode/SeamRear.cpp
     GCode/SeamRear.hpp
+    GCode/SeamRotating.cpp
+    GCode/SeamRotating.hpp
     GCode/SeamRandom.cpp
     GCode/SeamRandom.hpp
     GCode/SeamPainting.cpp

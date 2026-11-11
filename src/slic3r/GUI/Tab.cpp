@@ -1473,7 +1473,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("thin_walls", category_path + "detect-thin-walls");
         optgroup->append_single_option_line("thick_bridges", category_path + "thick_bridges");
         optgroup->append_single_option_line("two_pass_bridge_scope");
-        optgroup->append_single_option_line("external_perimeter_resolution");
+        optgroup->append_single_option_line("bridge_anchor_length");
+        optgroup->append_single_option_line("external_perimeter_sublayers");
+        optgroup->append_single_option_line("overhangs", category_path + "detect-bridging-perimeters");
+
+        optgroup = page->new_optgroup(L("Combine perimeters"));
         optgroup->append_single_option_line("first_internal_perimeter_every_layers");
         optgroup->append_single_option_line("second_internal_perimeter_every_layers");
         optgroup->append_single_option_line("automatic_internal_perimeters_combination");
@@ -1482,13 +1486,22 @@ void TabPrint::build()
         optgroup->append_single_option_line("combine_perimeters_method");
         optgroup->append_single_option_line("combine_perimeters_min_arc");
         optgroup->append_single_option_line("combine_perimeters_atomic_fragments");
-        optgroup->append_single_option_line("overhangs", category_path + "detect-bridging-perimeters");
 
-        optgroup = page->new_optgroup(L("Advanced"));
+        optgroup = page->new_optgroup(L("Seam"));
         optgroup->append_single_option_line("seam_position", category_path + "seam-position");
         optgroup->append_single_option_line("seam_gap_distance", category_path + "seam-gap-distance");
         optgroup->append_single_option_line("staggered_inner_seams", category_path + "staggered-inner-seams");
+        optgroup->append_single_option_line("staggered_inner_seams_mode");
+        optgroup->append_single_option_line("seam_rotation_define_by");
+        optgroup->append_single_option_line("seam_rotation_count");
+        optgroup->append_single_option_line("seam_rotation_step");
+        optgroup->append_single_option_line("seam_rotation_start");
+        optgroup->append_single_option_line("seam_rotation_order");
+        optgroup->append_single_option_line("seam_rotation_drift");
+        optgroup->append_single_option_line("seam_rotation_hole_offset");
+        optgroup->append_single_option_line("seam_rotation_sublayers");
 
+        optgroup = page->new_optgroup(L("Scarf seam"));
         const std::string scarf_seam_path{"seam-position_151069#"};
         optgroup->append_single_option_line("scarf_seam_placement", scarf_seam_path + "scarf-joint-placement");
         optgroup->append_single_option_line("scarf_seam_only_on_smooth", scarf_seam_path + "scarf-joint-only-on-smooth-perimeters");
@@ -1498,8 +1511,25 @@ void TabPrint::build()
         optgroup->append_single_option_line("scarf_seam_max_segment_length", scarf_seam_path + "max-scarf-joint-segment-length");
         optgroup->append_single_option_line("scarf_seam_on_inner_perimeters", scarf_seam_path + "scarf-joint-on-inner-perimeters");
 
-        optgroup->append_single_option_line("high_def_print");
-        optgroup->append_single_option_line("swap_first_int_w_ext_perimeter", category_path + "swap-first-internal-with-external-perimeter");
+        optgroup = page->new_optgroup(L("Quality preset"));
+        // One-shot action: applies the high definition bundle once, never restores on "uncheck".
+        create_line_with_widget(optgroup.get(), "high_def_print", "", [this](wxWindow* parent) {
+            auto btn = new wxButton(parent, wxID_ANY, _L("Apply high definition preset"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+            wxGetApp().SetWindowVariantForButton(btn);
+            wxGetApp().UpdateDarkUI(btn);
+            btn->SetFont(wxGetApp().normal_font());
+            btn->SetSize(btn->GetBestSize());
+            auto sizer = new wxBoxSizer(wxHORIZONTAL);
+            sizer->Add(btn);
+            btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+                DynamicPrintConfig new_conf = ConfigManipulation::high_def_print_bundle(*m_config);
+                load_config(new_conf);
+            });
+            return sizer;
+        });
+
+        optgroup = page->new_optgroup(L("Advanced"));
+        optgroup->append_single_option_line("first_internal_perimeter_last", category_path + "swap-first-internal-with-external-perimeter");
         optgroup->append_single_option_line("reverse_internal_perimeters", category_path + "reverse-internal-perimeters");
         optgroup->append_single_option_line("reverse_internal_perimeters_at", category_path + "reverse-internal-perimeters-at");
 
@@ -1621,7 +1651,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_material_speed");
         optgroup->append_single_option_line("support_material_interface_speed");
         optgroup->append_single_option_line("bridge_speed");
-        optgroup->append_single_option_line("bridge_anchor_length");
         optgroup->append_single_option_line("over_bridge_speed");
         optgroup->append_single_option_line("gap_fill_speed");
         optgroup->append_single_option_line("ironing_speed");
@@ -1666,8 +1695,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("max_volumetric_extrusion_rate_slope_positive", "pressure-equlizer_331504");
         optgroup->append_single_option_line("max_volumetric_extrusion_rate_slope_negative", "pressure-equlizer_331504");
 
-    page = add_options_page(L("Temperature"), "cog");
-        optgroup = page->new_optgroup(L("Temperature"));
+    page = add_options_page(L("Temperature offsets"), "cog");
+        optgroup = page->new_optgroup(L("Offset control"));
         optgroup->append_single_option_line("enable_temperature_offsets");
         optgroup->append_single_option_line("temperature_offset_layers");
         optgroup->append_single_option_line("temperature_change_threshold");
@@ -1678,13 +1707,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("first_internal_perimeter_temperature_offset");
         optgroup->append_single_option_line("second_internal_perimeter_temperature_offset");
         optgroup->append_single_option_line("perimeter_temperature_offset");
+        optgroup->append_single_option_line("overhang_perimeter_temperature_offset");
         optgroup->append_single_option_line("infill_temperature_offset");
         optgroup->append_single_option_line("solid_infill_temperature_offset");
         optgroup->append_single_option_line("top_solid_infill_temperature_offset");
         optgroup->append_single_option_line("support_material_temperature_offset");
         optgroup->append_single_option_line("support_material_interface_temperature_offset");
         optgroup->append_single_option_line("bridge_temperature_offset");
-        optgroup->append_single_option_line("overhang_perimeter_temperature_offset");
         optgroup->append_single_option_line("gap_fill_temperature_offset");
         optgroup->append_single_option_line("ironing_temperature_offset");
 

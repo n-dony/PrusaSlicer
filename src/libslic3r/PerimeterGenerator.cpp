@@ -165,7 +165,7 @@ static constexpr int PERIMETER_GROUP_NONE = -1;
 static void apply_perimeter_ordering_classic(
     ExtrusionEntityCollection &collection,
     const std::vector<int>    &entity_group_ids,
-    bool                       swap_first_int_w_ext_perimeter,
+    bool                       first_internal_perimeter_last,
     bool                       reverse_internal_perimeters,
     int                        reverse_internal_perimeters_at)
 {
@@ -216,7 +216,7 @@ static void apply_perimeter_ordering_classic(
             }
         }
 
-        if (swap_first_int_w_ext_perimeter) {
+        if (first_internal_perimeter_last) {
             std::vector<ExtrusionEntity *> reordered;
             reordered.reserve(loops.size());
             // Move depth==1 to end so it prints last in the group, bonding against
@@ -1246,7 +1246,7 @@ void PerimeterGenerator::process_arachne(
     }());
 
     Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(
-        perimeters, params.config.external_perimeters_first, params.config.swap_first_int_w_ext_perimeter,
+        perimeters, params.config.external_perimeters_first, params.config.first_internal_perimeter_last,
         params.config.reverse_internal_perimeters, params.config.reverse_internal_perimeters_at);
 
     ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions);
@@ -1696,9 +1696,9 @@ void PerimeterGenerator::process_classic(
         }
         // Apply the perimeter print-order options on top of the final print direction, so that
         // "print the first internal perimeter last" means last in the order actually emitted.
-        if (params.config.swap_first_int_w_ext_perimeter || params.config.reverse_internal_perimeters)
+        if (params.config.first_internal_perimeter_last || params.config.reverse_internal_perimeters)
             apply_perimeter_ordering_classic(entities, perimeter_group_ids,
-                                             params.config.swap_first_int_w_ext_perimeter,
+                                             params.config.first_internal_perimeter_last,
                                              params.config.reverse_internal_perimeters,
                                              params.config.reverse_internal_perimeters_at);
         // Two-pass bridge: duplicate bridge perimeter paths as standalone pass_index=0 pre-pass.

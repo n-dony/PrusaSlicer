@@ -49,11 +49,11 @@ TEST_CASE("External resolution factor table", "[ExternalResolution]")
 TEST_CASE("External resolution option parses, serializes, defaults to 1 and validates", "[ExternalResolution]")
 {
     DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
-    CHECK(cfg.opt_int("external_perimeter_resolution") == 1);
-    cfg.set_deserialize_strict("external_perimeter_resolution", "3");
-    CHECK(cfg.opt_int("external_perimeter_resolution") == 3);
-    CHECK(cfg.opt_serialize("external_perimeter_resolution") == "3");
-    const ConfigOptionDef *def = print_config_def.get("external_perimeter_resolution");
+    CHECK(cfg.opt_int("external_perimeter_sublayers") == 1);
+    cfg.set_deserialize_strict("external_perimeter_sublayers", "3");
+    CHECK(cfg.opt_int("external_perimeter_sublayers") == 3);
+    CHECK(cfg.opt_serialize("external_perimeter_sublayers") == "3");
+    const ConfigOptionDef *def = print_config_def.get("external_perimeter_sublayers");
     REQUIRE(def != nullptr);
     CHECK(def->min == 1);
     CHECK(def->max == 8);
@@ -65,10 +65,10 @@ TEST_CASE("External resolution option parses, serializes, defaults to 1 and vali
         Test::init_print({ Test::TestMesh::cube_20x20x20 }, print, model, items);
         return print.validate();
     };
-    CHECK(validate({ { "external_perimeter_resolution", "2" }, { "perimeter_generator", "arachne" } }).empty());
-    CHECK(! validate({ { "external_perimeter_resolution", "2" }, { "perimeter_generator", "classic" } }).empty());
-    CHECK(validate({ { "external_perimeter_resolution", "1" }, { "perimeter_generator", "classic" } }).empty());
-    CHECK(! validate({ { "external_perimeter_resolution", "2" }, { "perimeter_generator", "arachne" }, { "spiral_vase", "1" } }).empty());
+    CHECK(validate({ { "external_perimeter_sublayers", "2" }, { "perimeter_generator", "arachne" } }).empty());
+    CHECK(! validate({ { "external_perimeter_sublayers", "2" }, { "perimeter_generator", "classic" } }).empty());
+    CHECK(validate({ { "external_perimeter_sublayers", "1" }, { "perimeter_generator", "classic" } }).empty());
+    CHECK(! validate({ { "external_perimeter_sublayers", "2" }, { "perimeter_generator", "arachne" }, { "spiral_vase", "1" } }).empty());
 }
 
 namespace {
@@ -86,7 +86,7 @@ std::unique_ptr<ExtSliced> ext_slice(const TriangleMesh &mesh, double layer_heig
         { "layer_height",                 layer_height },
         { "first_layer_height",           first_layer_height },
         { "perimeter_generator",          "arachne" },
-        { "external_perimeter_resolution", resolution },
+        { "external_perimeter_sublayers", resolution },
         { "fill_density",                 "5%" },
         { "top_one_perimeter_type",       "none" },
         { "cooling",                      "0" }
@@ -258,7 +258,7 @@ TEST_CASE("External resolution emits the lower passes as real levels of the laye
             { "layer_height",                  0.2 },
             { "first_layer_height",            0.2 },
             { "perimeter_generator",           "arachne" },
-            { "external_perimeter_resolution", resolution },
+            { "external_perimeter_sublayers", resolution },
             { "cooling",                       "0" }
         }));
     };
@@ -359,7 +359,7 @@ TEST_CASE("External resolution sub-pass seams follow the top level seam in align
             { "layer_height",                  0.3 },
             { "first_layer_height",            0.3 },
             { "perimeter_generator",           "arachne" },
-            { "external_perimeter_resolution", 3 },
+            { "external_perimeter_sublayers", 3 },
             { "seam_position",                 mode },
             { "scarf_seam_length",             0 },
             { "cooling",                       "0" }
@@ -406,7 +406,7 @@ TEST_CASE("External resolution k=1 keeps the nominal layer height and layer coun
             { "perimeter_generator", "arachne" }, { "seam_position", "aligned" }, { "cooling", "0" } };
         DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config_with(items);
         if (res)
-            cfg.set_deserialize_strict("external_perimeter_resolution", res);
+            cfg.set_deserialize_strict("external_perimeter_sublayers", res);
         return gcode_seam_levels(Test::slice({ make_cylinder(30., 4.) }, cfg));
     };
     const std::vector<SeamLevel> dflt = slice(nullptr);
@@ -427,7 +427,7 @@ TEST_CASE("External resolution nearest mode slices and every sub-level has an ex
         { "layer_height",                  0.3 },
         { "first_layer_height",            0.3 },
         { "perimeter_generator",           "arachne" },
-        { "external_perimeter_resolution", 3 },
+        { "external_perimeter_sublayers", 3 },
         { "seam_position",                 "nearest" },
         { "cooling",                       "0" }
     });
@@ -437,4 +437,16 @@ TEST_CASE("External resolution nearest mode slices and every sub-level has an ex
         INFO("z " << lv.z << " h " << lv.height << " only_ext " << lv.only_ext);
         CHECK(lv.has_ext);
     }
+}
+
+TEST_CASE("Legacy keys external_perimeter_resolution / swap_first_int_w_ext_perimeter load into the renamed options", "[ExternalResolution][Legacy]")
+{
+    using namespace Slic3r;
+    DynamicPrintConfig cfg = DynamicPrintConfig::full_print_config();
+    REQUIRE_NOTHROW(cfg.load_from_ini_string("external_perimeter_resolution = 3\nswap_first_int_w_ext_perimeter = 1\n",
+                                             ForwardCompatibilitySubstitutionRule::Disable));
+    CHECK(cfg.opt_int("external_perimeter_sublayers") == 3);
+    CHECK(cfg.opt_bool("first_internal_perimeter_last"));
+    CHECK(! cfg.has("external_perimeter_resolution"));
+    CHECK(! cfg.has("swap_first_int_w_ext_perimeter"));
 }

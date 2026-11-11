@@ -14,6 +14,7 @@
 #include "libslic3r/GCode/SeamShells.hpp"
 #include "libslic3r/GCode/SeamAligned.hpp"
 #include "libslic3r/GCode/SeamRear.hpp"
+#include "libslic3r/GCode/SeamRotating.hpp"
 #include "libslic3r/GCode/SeamRandom.hpp"
 #include "libslic3r/GCode/ModelVisibility.hpp"
 #include "libslic3r/GCode/SeamGeometry.hpp"
@@ -68,7 +69,8 @@ Perimeters::LayerPerimeters sort_to_layers(Shells::Shells<> &&shells) {
 ObjectSeams precalculate_seams(
     const Params &params,
     ObjectLayerPerimeters &&seam_data,
-    const std::function<void(void)> &throw_if_canceled
+    const std::function<void(void)> &throw_if_canceled,
+    std::map<const PrintObject *, std::vector<std::vector<std::vector<SeamChoice>>>> *pass_seams = nullptr
 ) {
     ObjectSeams result;
 
@@ -93,6 +95,23 @@ ObjectSeams precalculate_seams(
         }
         case spRear: {
             result[print_object] = Rear::get_object_seams(std::move(layer_perimeters), params.rear_tolerance, params.rear_y_offset);
+            break;
+        }
+        case spRotating: {
+            // All rotating options are per-object: read them from the object config, never from Params.
+            const Rotating::Params rotating_params{Rotating::Params::from_config(print_object->config())};
+            const std::vector<std::size_t> seam_indices{Rotating::layer_seam_indices(*print_object, rotating_params)};
+            std::vector<std::vector<std::optional<std::size_t>>> pass_indices;
+            const bool want_table{pass_seams != nullptr && rotating_params.sublayers == srsLoop &&
+                                  Rotating::has_external_sub_passes(*print_object)};
+            if (want_table) {
+                pass_indices = Rotating::layer_pass_seam_indices(*print_object, rotating_params);
+            }
+            result[print_object] = Rotating::get_object_seams(
+                std::move(layer_perimeters), seam_indices, rotating_params,
+                Rotating::object_frame_yaw(print_object->trafo()),
+                want_table ? &pass_indices : nullptr, want_table ? &(*pass_seams)[print_object] : nullptr
+            );
             break;
         }
         case spRandom: {
@@ -126,7 +145,6 @@ Params Placer::get_params(const DynamicPrintConfig &config) {
     params.perimeter.convex_threshold = Slic3r::Geometry::deg2rad(10.0);
     params.perimeter.concave_threshold = Slic3r::Geometry::deg2rad(15.0);
 
-    params.staggered_inner_seams = config.opt_bool("staggered_inner_seams");
 
     params.max_nearest_detour = 1.0;
     params.rear_tolerance = 1.0;
@@ -173,7 +191,8 @@ void Placer::init(
     }
 
     this->params = params;
-    this->seams_per_object = precalculate_seams(params, std::move(perimeters_for_precalculation), throw_if_canceled);
+    this->rotating_pass_seams.clear();
+    this->seams_per_object = precalculate_seams(params, std::move(perimeters_for_precalculation), throw_if_canceled, &this->rotating_pass_seams);
 
     BOOST_LOG_TRIVIAL(debug) << "SeamPlacer: init: end";
 }
@@ -300,21 +319,93 @@ static LoopWallRole loop_wall_role(const ExtrusionLoop &loop)
     return LoopWallRole::Unknown;
 }
 
+std::pair<std::size_t, Vec2d> point_at_arc_length(
+    const Linesf &lines, const std::size_t start_line, const Vec2d &start_point, double arc
+) {
+    const std::size_t n{lines.size()};
+    if (n == 0) {
+        return {0, start_point};
+    }
+    double total{0.0};
+    for (const Linef &line : lines) {
+        total += (line.b - line.a).norm();
+    }
+    if (total <= EPSILON) {
+        return {start_line, start_point};
+    }
+    arc = std::fmod(arc, total);
+    if (arc < 0.0) {
+        arc += total;
+    }
+    // Forward walk by arc (a negative request was wrapped to the equivalent forward arc).
+    std::size_t index{start_line % n};
+    double remaining_in_line{(lines[index].b - start_point).norm()};
+    if (arc <= remaining_in_line) {
+        const Vec2d dir{(lines[index].b - lines[index].a).normalized()};
+        return {index, start_point + dir * arc};
+    }
+    arc -= remaining_in_line;
+    for (std::size_t step{0}; step <= n; ++step) {
+        index = (index + 1) % n;
+        const double length{(lines[index].b - lines[index].a).norm()};
+        if (arc <= length) {
+            const Vec2d dir{length > EPSILON ? Vec2d{(lines[index].b - lines[index].a) / length} : Vec2d{Vec2d::Zero()}};
+            return {index, lines[index].a + dir * arc};
+        }
+        arc -= length;
+    }
+    return {start_line, start_point};
+}
+
+namespace {
+SeamChoice project_point_to_perimeter(const Vec2d &point, const Perimeters::Perimeter &perimeter) {
+    const std::size_t n{perimeter.positions.size()};
+    SeamChoice best{0, 0, perimeter.positions.empty() ? point : perimeter.positions[0]};
+    double best_distance{std::numeric_limits<double>::infinity()};
+    for (std::size_t i{0}; i < n; ++i) {
+        const std::size_t j{(i + 1) % n};
+        const Vec2d &a{perimeter.positions[i]};
+        const Vec2d edge{perimeter.positions[j] - a};
+        const double length_sq{edge.squaredNorm()};
+        const double t{length_sq > EPSILON ? std::clamp((point - a).dot(edge) / length_sq, 0.0, 1.0) : 0.0};
+        const Vec2d projected{a + edge * t};
+        const double distance{(point - projected).squaredNorm()};
+        if (distance < best_distance) {
+            best_distance = distance;
+            if (t <= 1e-9) {
+                best = {i, i, a};
+            } else if (t >= 1.0 - 1e-9) {
+                best = {j, j, perimeter.positions[j]};
+            } else {
+                best = {i, j, projected};
+            }
+        }
+    }
+    return best;
+}
+} // namespace
+
 boost::variant<Point, Scarf::Scarf> finalize_seam_position(
     const ExtrusionLoop &loop,
     const PrintRegion *region,
     SeamChoice seam_choice,
     const Perimeters::Perimeter &perimeter,
     const bool staggered_inner_seams,
+    const bool half_loop,
     const bool flipped,
-    const bool thick_bridges
+    const bool thick_bridges,
+    const std::optional<double> min_seam_gap_rad
 ) {
     using Perimeters::offset_along_perimeter;
     using Perimeters::PointOnPerimeter;
 
     const Polygon loop_polygon{Geometry::to_polygon(loop)};
     const LoopWallRole wall_role{loop_wall_role(loop)};
-    const bool do_staggering{staggered_inner_seams && wall_role == LoopWallRole::Inner};
+    const std::size_t loop_depth{loop.paths.empty() ? 0 : loop.paths.front().attributes().perimeter_index.value_or(0)};
+    // Half-loop mode: even depths keep the external seam position, odd depths are half a loop away.
+    const bool do_staggering{
+        staggered_inner_seams && wall_role == LoopWallRole::Inner && (!half_loop || loop_depth % 2 == 1)};
+    const bool do_half_loop{do_staggering && half_loop};
     const double loop_width{loop.paths.empty() ? 0.0 : loop.paths.front().width()};
 
     const ExPolygon perimeter_polygon{Geometry::scaled(perimeter.positions)};
@@ -347,7 +438,53 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
         }};
 
     // ExtrusionRole::Perimeter is inner perimeter.
-    if (do_staggering) {
+    if (do_half_loop) {
+        const double loop_length{unscaled(loop_polygon.length())};
+        const auto reproject = [&](const Vec2d &point) {
+            return project_point_to_perimeter(point, perimeter);
+        };
+        const auto acceptable = [&](const SeamChoice &choice) {
+            for (const std::size_t i : {choice.previous_index, choice.next_index}) {
+                if (perimeter.point_types[i] == Perimeters::PointType::blocker ||
+                    perimeter.point_classifications[i] == Perimeters::PointClassification::overhang) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Walk in print direction (the loop polygon is stored in print order).
+        const double half{loop_length / 2.0};
+        Vec2d half_point{point_at_arc_length(loop_lines, loop_line_index, loop_point, half).second};
+        SeamChoice half_choice{reproject(half_point)};
+        if (!acceptable(half_choice)) {
+            const double step{std::max(0.2, loop_length / 200.0)};
+            const int max_steps{static_cast<int>(0.1 * loop_length / step)};
+            for (int k = 1; k <= max_steps; ++k) {
+                bool found{false};
+                for (const double sign : {1.0, -1.0}) {
+                    const Vec2d candidate{
+                        point_at_arc_length(loop_lines, loop_line_index, loop_point, half + sign * k * step).second};
+                    const SeamChoice candidate_choice{reproject(candidate)};
+                    if (acceptable(candidate_choice)) {
+                        half_point = candidate;
+                        half_choice = candidate_choice;
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    break;
+                }
+            }
+        }
+        const auto [new_line_index, new_loop_point]{project_to_extrusion_loop(half_choice, perimeter, distancer)};
+        if ((new_loop_point - half_point).norm() > 5.0) {
+            return scaled(half_point);
+        }
+        seam_choice = half_choice;
+        loop_line_index = new_line_index;
+        loop_point = new_loop_point;
+    } else if (do_staggering) {
         const double depth = (loop_point - seam_choice.position).norm() -
             loop_width / 2.0;
 
@@ -404,6 +541,20 @@ boost::variant<Point, Scarf::Scarf> finalize_seam_position(
 
     if (thick_bridges && is_overhang) {
         place_scarf_seam = false;
+    }
+
+    // Rotating seams: a scarf longer than half the smallest seam gap would overlap the neighbouring seams.
+    // Decided on the matched external perimeter (not on this loop's own length) so that every loop of
+    // the perimeter group gets the same verdict.
+    if (place_scarf_seam && min_seam_gap_rad && !region->config().scarf_seam_entire_loop) {
+        double perimeter_length{0.0};
+        const std::size_t count{perimeter.positions.size()};
+        for (std::size_t i{0}; i < count; ++i) {
+            perimeter_length += (perimeter.positions[(i + 1) % count] - perimeter.positions[i]).norm();
+        }
+        if (Rotating::scarf_guard_blocks(region->config().scarf_seam_length.value, perimeter_length, *min_seam_gap_rad)) {
+            return scaled(loop_point);
+        }
     }
 
     if (place_scarf_seam) {
@@ -594,7 +745,7 @@ int get_perimeter_count(const Layer *layer){
 
 boost::variant<Point, Scarf::Scarf> Placer::place_seam(
     const Layer *layer, const PrintRegion *region, const ExtrusionLoop &loop, const bool flipped, const Point &last_pos,
-    std::optional<std::size_t> /*sub_pass: reserved for the rotating-loop mode*/
+    std::optional<std::size_t> sub_pass
 ) const {
     const PrintObject *po = layer->object();
     // Must not be called with supprot layer.
@@ -604,6 +755,12 @@ boost::variant<Point, Scarf::Scarf> Placer::place_seam(
     const size_t layer_index = layer->id() - po->slicing_parameters().raft_layers();
 
     const bool thick_bridges{po->config().thick_bridges.value};
+    const bool staggered_inner_seams{po->config().staggered_inner_seams.value};
+    const bool half_loop{po->config().staggered_inner_seams_mode.value == sismHalfLoop};
+    std::optional<double> min_gap;
+    if (po->config().seam_position.value == spRotating) {
+        min_gap = Rotating::min_seam_gap_rad(Rotating::Params::from_config(po->config()));
+    }
 
     if (po->config().seam_position.value == spNearest) {
         const std::vector<Perimeters::BoundedPerimeter> &perimeters{
@@ -612,10 +769,22 @@ boost::variant<Point, Scarf::Scarf> Placer::place_seam(
             place_seam_near(perimeters, loop, last_pos, this->params.max_nearest_detour);
         return finalize_seam_position(
             loop, region, seam_choice, perimeters[perimeter_index].perimeter,
-            this->params.staggered_inner_seams, flipped, thick_bridges
+            staggered_inner_seams, half_loop, flipped, thick_bridges, min_gap
         );
     } else {
         const std::vector<SeamPerimeterChoice> &seams_on_perimeters{this->seams_per_object.at(po)[layer_index]};
+        // Rotating loop mode: per-sub-pass seam choices, parallel to seams_on_perimeters.
+        const std::vector<SeamChoice> *pass_choices{nullptr};
+        if (sub_pass.has_value()) {
+            if (const auto table = this->rotating_pass_seams.find(po); table != this->rotating_pass_seams.end() &&
+                layer_index < table->second.size() && *sub_pass < table->second[layer_index].size() &&
+                table->second[layer_index][*sub_pass].size() == seams_on_perimeters.size()) {
+                pass_choices = &table->second[layer_index][*sub_pass];
+            }
+        }
+        const auto choice_of = [&](const SeamPerimeterChoice &entry) -> const SeamChoice & {
+            return pass_choices != nullptr ? (*pass_choices)[&entry - seams_on_perimeters.data()] : entry.choice;
+        };
 
         // Special case.
         // If there are only two perimeters and the current perimeter is hole (clockwise).
@@ -639,14 +808,14 @@ boost::variant<Point, Scarf::Scarf> Placer::place_seam(
                 seams_on_perimeters[0].perimeter.is_hole ? seams_on_perimeters[1] :
                                                            seams_on_perimeters[0]};
             return finalize_seam_position(
-                loop, region, non_hole_seam.choice, non_hole_seam.perimeter,
-                this->params.staggered_inner_seams, flipped, thick_bridges
+                loop, region, choice_of(non_hole_seam), non_hole_seam.perimeter,
+                staggered_inner_seams, half_loop, flipped, thick_bridges, min_gap
             );
         }
 
         return finalize_seam_position(
-            loop, region, closest_seam.choice, closest_seam.perimeter,
-            this->params.staggered_inner_seams, flipped, thick_bridges
+            loop, region, choice_of(closest_seam), closest_seam.perimeter,
+            staggered_inner_seams, half_loop, flipped, thick_bridges, min_gap
         );
     }
 }

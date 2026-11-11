@@ -9,6 +9,7 @@
 #include "format.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/GCode/SeamRotating.hpp"
 #include "MsgDialog.hpp"
 
 #include <string>
@@ -279,16 +280,25 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         }
     }
 
+    // Legacy presets may carry high_def_print=1: apply the bundle once and clear the flag
+    // (the option is now a one-shot action, see the "Apply high definition preset" button).
     if (config->opt_bool("high_def_print")) {
-        DynamicPrintConfig new_conf = *config;
-        new_conf.set_key_value("perimeters", new ConfigOptionInt(std::max(config->opt_int("perimeters"), 3)));
-        new_conf.set_key_value("swap_first_int_w_ext_perimeter", new ConfigOptionBool(true));
-        new_conf.set_key_value("first_internal_perimeter_every_layers", new ConfigOptionInt(2));
-        new_conf.set_key_value("second_internal_perimeter_every_layers", new ConfigOptionInt(2));
-        new_conf.set_key_value("infill_every_layers", new ConfigOptionInt(2));
-        new_conf.set_key_value("scarf_seam_placement", new ConfigOptionEnum<ScarfSeamPlacement>(ScarfSeamPlacement::countours));
+        DynamicPrintConfig new_conf = high_def_print_bundle(*config);
+        new_conf.set_key_value("high_def_print", new ConfigOptionBool(false));
         apply(config, &new_conf);
     }
+}
+
+DynamicPrintConfig ConfigManipulation::high_def_print_bundle(const DynamicPrintConfig& config)
+{
+    DynamicPrintConfig new_conf = config;
+    new_conf.set_key_value("perimeters", new ConfigOptionInt(std::max(config.opt_int("perimeters"), 3)));
+    new_conf.set_key_value("first_internal_perimeter_last", new ConfigOptionBool(true));
+    new_conf.set_key_value("first_internal_perimeter_every_layers", new ConfigOptionInt(2));
+    new_conf.set_key_value("second_internal_perimeter_every_layers", new ConfigOptionInt(2));
+    new_conf.set_key_value("infill_every_layers", new ConfigOptionInt(2));
+    new_conf.set_key_value("scarf_seam_placement", new ConfigOptionEnum<ScarfSeamPlacement>(ScarfSeamPlacement::countours));
+    return new_conf;
 }
 
 void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
@@ -296,11 +306,24 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     bool have_perimeters = config->opt_int("perimeters") > 0;
     for (auto el : { "extra_perimeters","extra_perimeters_on_overhangs", "thin_walls", "overhangs",
                     "seam_position","staggered_inner_seams", "external_perimeters_first",
-                    "swap_first_int_w_ext_perimeter", "reverse_internal_perimeters",
+                    "first_internal_perimeter_last", "reverse_internal_perimeters",
                     "external_perimeter_extrusion_width",
                     "perimeter_speed", "small_perimeter_speed", "first_internal_perimeter_speed",
                     "second_internal_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
         toggle_field(el, have_perimeters);
+    {
+        const bool rotating = have_perimeters && config->opt_enum<SeamPosition>("seam_position") == spRotating;
+        const bool by_count = config->opt_enum<SeamRotationDefineBy>("seam_rotation_define_by") == srdCount;
+        toggle_field("seam_rotation_define_by", rotating);
+        toggle_field("seam_rotation_count", rotating && by_count);
+        toggle_field("seam_rotation_order", rotating && by_count);
+        toggle_field("seam_rotation_step", rotating && !by_count);
+        toggle_field("seam_rotation_start", rotating);
+        toggle_field("seam_rotation_drift", rotating);
+        toggle_field("seam_rotation_hole_offset", rotating);
+        toggle_field("seam_rotation_sublayers", rotating);
+        toggle_field("staggered_inner_seams_mode", have_perimeters && config->opt_bool("staggered_inner_seams"));
+    }
     toggle_field("reverse_internal_perimeters_at", have_perimeters && config->opt_bool("reverse_internal_perimeters"));
 
     for (size_t i = 0; i < 4; i++) {
@@ -332,7 +355,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
         toggle_field(el, has_solid_infill);
 
     for (auto el : { "fill_angle", "bridge_angle", "infill_extrusion_width",
-                    "infill_speed", "bridge_speed", "bridge_anchor_length", "over_bridge_speed" })
+                    "infill_speed", "bridge_speed", "over_bridge_speed" })
         toggle_field(el, have_infill || has_solid_infill);
 
     toggle_field("first_internal_perimeter_every_layers", have_perimeters);
@@ -340,14 +363,19 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     toggle_field("automatic_internal_perimeters_combination", have_perimeters);
     toggle_field("automatic_internal_perimeters_combination_max_layer_height",
                  have_perimeters && config->opt_bool("automatic_internal_perimeters_combination"));
-    toggle_field("combine_perimeters_max_shift",          have_perimeters);
-    toggle_field("combine_perimeters_method",             have_perimeters);
+    // Combining only does something when some "every N layers" > 1 or the automatic mode is on.
+    const bool have_perimeter_combination = have_perimeters &&
+        (config->opt_int("first_internal_perimeter_every_layers") > 1 ||
+         config->opt_int("second_internal_perimeter_every_layers") > 1 ||
+         config->opt_bool("automatic_internal_perimeters_combination"));
+    toggle_field("combine_perimeters_max_shift",          have_perimeter_combination);
+    toggle_field("combine_perimeters_method",             have_perimeter_combination);
     {
         const auto cpm = config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method");
-        toggle_field("combine_perimeters_atomic_fragments", have_perimeters &&
+        toggle_field("combine_perimeters_atomic_fragments", have_perimeter_combination &&
             (cpm == cpmLoopStrict || cpm == cpmLoopTolerant || cpm == cpmLegacyMaskV3));
     }
-    toggle_field("combine_perimeters_min_arc",            have_perimeters && config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == cpmArcCoverage);
+    toggle_field("combine_perimeters_min_arc",            have_perimeter_combination && config->opt_enum<CombinePerimetersMethod>("combine_perimeters_method") == cpmArcCoverage);
 
     const bool has_ensure_vertical_shell_thickness = config->opt_enum<EnsureVerticalShellThickness>("ensure_vertical_shell_thickness") != EnsureVerticalShellThickness::Disabled;
     toggle_field("top_solid_min_thickness", !has_spiral_vase && has_top_solid_infill && has_ensure_vertical_shell_thickness);
@@ -439,6 +467,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
     toggle_field("min_feature_size", have_arachne);
     toggle_field("min_bead_width", have_arachne);
     toggle_field("thin_walls", !have_arachne);
+    toggle_field("external_perimeter_sublayers", have_perimeters && have_arachne);
+    toggle_field("bridge_anchor_length", have_perimeters &&
+        two_pass_has_perims(config->opt_enum<TwoPassBridgeScope>("two_pass_bridge_scope")));
 
     toggle_field("scarf_seam_placement", !has_spiral_vase);
     const auto scarf_seam_placement{config->opt_enum<ScarfSeamPlacement>("scarf_seam_placement")};

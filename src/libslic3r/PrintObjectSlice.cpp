@@ -543,7 +543,7 @@ void PrintObject::slice()
     // k stays 1 where the sub-slices cannot be produced or consumed: the first object layer, spiral vase, multi-material / fuzzy skin painted
     // objects, interlocking, virtual extruders, multi-extruder prints (a level cannot host a tool change) and the classic perimeter generator.
     // TODO: layers whose regions end up with PerimeterRegions are only known in Layer::make_perimeters(), where the sub-passes are skipped.
-    if (const int requested = m_config.external_perimeter_resolution.value; requested > 1 && ! m_layers.empty() &&
+    if (const int requested = m_config.external_perimeter_sublayers.value; requested > 1 && ! m_layers.empty() &&
         m_config.perimeter_generator.value == PerimeterGeneratorType::Arachne &&
         ! m_print->config().spiral_vase.value && ! this->is_mm_painted() && ! this->is_fuzzy_skin_painted() &&
         ! m_config.interlocking_beam.value && m_print->virtual_extruders().empty() &&

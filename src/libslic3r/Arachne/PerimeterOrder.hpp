@@ -57,12 +57,12 @@ struct PerimeterExtrusion
 
 using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
 
-// swap_first_int_w_ext_perimeter: move the first internal perimeter of each group to print last within that group ("groove injection").
+// first_internal_perimeter_last: move the first internal perimeter of each group to print last within that group ("groove injection").
 // reverse_internal_perimeters: within each group, reverse the print order of internal perimeters at depth >= reverse_internal_perimeters_at.
 PerimeterExtrusions ordered_perimeter_extrusions(
     const Perimeters &perimeters,
     bool external_perimeters_first,
-    bool swap_first_int_w_ext_perimeter = false,
+    bool first_internal_perimeter_last = false,
     bool reverse_internal_perimeters = false,
     int  reverse_internal_perimeters_at = 0);
 

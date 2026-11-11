@@ -61,6 +61,8 @@ public:
     // FFF print
     void    update_print_fff_config(DynamicPrintConfig* config, const bool is_global_config = false);
     void    toggle_print_fff_options(DynamicPrintConfig* config);
+    // The list of settings applied by the "high definition" preset action.
+    static DynamicPrintConfig high_def_print_bundle(const DynamicPrintConfig& config);
 
     // SLA
     void    toggle_print_sla_options(DynamicPrintConfig* config);

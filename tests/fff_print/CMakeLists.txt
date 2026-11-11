@@ -21,6 +21,7 @@ add_executable(${_TEST_NAME}_tests
     test_seam_geometry.cpp
     test_seam_aligned.cpp
     test_seam_rear.cpp
+    test_seam_rotating.cpp
     test_seam_random.cpp
     test_seam_scarf.cpp
     benchmark_seams.cpp

@@ -339,7 +339,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             invalidated |= object->invalidate_step(ostep);
     if (min_layer_height_changed)
         for (PrintObject *object : m_objects)
-            if (object->config().external_perimeter_resolution.value > 1)
+            if (object->config().external_perimeter_sublayers.value > 1)
                 invalidated |= object->invalidate_step(posSlice);
     return invalidated;
 }
@@ -527,14 +527,14 @@ std::string Print::validate(std::vector<std::string>* warnings) const
     }
 
     for (const PrintObject *object : m_objects)
-        if (object->config().external_perimeter_resolution.value > 1) {
+        if (object->config().external_perimeter_sublayers.value > 1) {
             if (m_config.spiral_vase)
-                return _u8L("External perimeter resolution greater than 1 cannot be used in Spiral Vase mode.");
+                return _u8L("External perimeter sub-layers greater than 1 cannot be used in Spiral Vase mode.");
             if (object->config().perimeter_generator.value != PerimeterGeneratorType::Arachne)
-                return _u8L("External perimeter resolution greater than 1 requires the Arachne perimeter generator.");
+                return _u8L("External perimeter sub-layers greater than 1 requires the Arachne perimeter generator.");
             // The lower levels cannot host a tool change or a wipe tower purge (MVP).
             if (this->extruders().size() > 1)
-                return _u8L("External perimeter resolution greater than 1 cannot be used with multiple extruders / materials.");
+                return _u8L("External perimeter sub-layers greater than 1 cannot be used with multiple extruders / materials.");
         }
 
     if (m_config.machine_limits_usage == MachineLimitsUsage::EmitToGCode && m_config.gcode_flavor == gcfKlipper)

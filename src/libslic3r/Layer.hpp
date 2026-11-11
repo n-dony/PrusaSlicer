@@ -199,6 +199,20 @@ public:
     LayerRegion*            get_region(int idx) { return m_regions[idx]; }
     LayerRegion*            add_region(const PrintRegion *print_region);
     const LayerRegionPtrs&  regions() const { return m_regions; }
+    // True if this layer only carries the perimeters of a combine group whose top is a higher layer
+    // (a "pure sub-layer" as far as perimeters / seams are concerned). Same predicate as the cooling
+    // buffer's combine_flush_decision() in GCode.cpp, restricted to perimeter bits (the cooling code
+    // also looks at infill_moved_to_upper_layer and is left as is).
+    bool                    is_pure_perimeter_sub_layer() const {
+        bool any_sub = false;
+        constexpr uint8_t perim = LayerRegion::CombineRoleFirstInternal | LayerRegion::CombineRoleSecondInternal;
+        for (const LayerRegion *r : m_regions) {
+            if (r->combine_top_mask() & perim)
+                return false;
+            any_sub = any_sub || (r->combine_sub_mask() & perim) || r->perimeters_moved_to_upper_layer();
+        }
+        return any_sub;
+    }
     // Test whether whether there are any slices assigned to this layer.
     bool                    empty() const;    
     void                    make_slices();
@@ -221,7 +235,7 @@ public:
         return false;
     }
     // External perimeter resolution: number of stacked passes k (1 = disabled) of the external perimeter of this layer,
-    // computed by PrintObject::slice() from external_perimeter_resolution, the layer height and the minimum layer height.
+    // computed by PrintObject::slice() from external_perimeter_sublayers, the layer height and the minimum layer height.
     unsigned int            external_resolution() const { return m_external_resolution; }
     void                    make_perimeters();
     void                    make_fills(FillAdaptive::Octree     *adaptive_fill_octree,
