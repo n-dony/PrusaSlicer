@@ -10,21 +10,67 @@ The fork has three goals:
 2. **Control.** Decide where seams go and how perimeters are ordered, laid down, cooled and heated.
 3. **Multi-pass as a feature, not a hack.** Two-pass bridges, high-definition outer walls and combined internal perimeters are tunable options with a GUI, not manual G-code tricks.
 
-## What this branch contains
+## What this branch adds
 
-This branch is **PrusaSlicer 3.0.0-alpha14 + the first-generation fork features**.
+This branch is **PrusaSlicer 3.0.0-alpha14 + the first-generation fork features**. The newer features (new combine engine, combine-aware cooling, high-definition outer wall, bridge scope and crosshatch, rotating seam, opposite-side inner seams) are in the **2.9.7 branch** ([`master`](https://github.com/n-dony/PrusaSlicer/tree/master)) and are being ported here. See "Not in this branch yet" below.
 
-> The newer 2.9.x features (new combine engine, combine-aware cooling, high-definition outer wall, bridge scope/crosshatch, seam work) live in the **2.9.7 branch** ([`master`](https://github.com/n-dony/PrusaSlicer/tree/master)) and are being ported to v3.
+Where to find things: print settings, category **Walls & perimeters**, group **Walls quality**, unless noted.
 
-| Feature | What it does | Why you want it | Option names |
+| Feature | What it does | Why you want it | Where / option names |
 |---|---|---|---|
-| First / second internal perimeter roles | Distinct extrusion roles with their own speed, acceleration and print-order controls. | Tune the walls just behind the visible surface separately from deep inner walls. | Print settings (speed, acceleration, walls); order options below |
-| Perimeter order | Reverse internal perimeters from a chosen depth; print the first internal perimeter before the external one. | Control surface finish and dimensional accuracy. | `reverse_internal_perimeters`, `reverse_internal_perimeters_at`, `swap_first_int_w_ext_perimeter` |
-| Per-role temperature offsets | 12 independent offsets of +-50 C, one per role, applied during extrusion. | Hotter for bridges and slow walls, cooler for fast infill. | `enable_temperature_offsets`, `temperature_offset_layers`, `*_temperature_offset` (e.g. `bridge_temperature_offset`) |
-| Two-pass bridges (first version) | Bridges laid in two passes, foundation then final. *Experimental*; a simple on/off in this branch. | Better-supported bridges on thick layers. | `two_pass_bridge` (renamed to `two_pass_bridge_scope` in master), `bridge_anchor_length` |
-| High definition print | Quality preset switch. | One checkbox for a quality-oriented setup. | `high_def_print` ("High definition print") |
+| First / second internal perimeter roles | The first and second internal perimeters are distinct extrusion roles, each with its own speed and acceleration (and temperature offset, see below). | Tune the walls just behind the visible surface separately from deep inner walls. | Speed and acceleration settings: `first_internal_perimeter_speed`, `second_internal_perimeter_speed`, `first_internal_perimeter_acceleration`, `second_internal_perimeter_acceleration` |
+| Perimeter order | Reverse the order of internal perimeters from a chosen depth. Optionally swap the first internal perimeter with the external one, so the external wall is laid first and the first internal perimeter is printed after it. | Control which wall is printed against which, for surface finish and dimensional accuracy. | `reverse_internal_perimeters` ("Reverse internal perimeters"), `reverse_internal_perimeters_at` ("Reverse internal perimeters at", default 2), `swap_first_int_w_ext_perimeter` ("Swap first internal with external perimeter") |
+| Combine perimeters across layers | Print the first internal perimeter and the deeper internal perimeters every N layers, as thicker walls. The external wall is never combined. | Fewer, thicker internal walls print much faster; the visible wall stays at full resolution. | Category **Infill**, group **Infill combination**: `first_internal_perimeter_every_layers`, `second_internal_perimeter_every_layers` (1 = off) |
+| Per-role temperature offsets | 12 independent offsets of +-50 C, one per role (external, first/second internal, perimeter, overhang perimeter, infill, solid infill, top solid infill, bridge, gap fill, support material, ironing). | Hotter for bridges and slow outer walls, cooler for fast infill, in the same layer. | Category **Temperature offsets**: `enable_temperature_offsets`, `temperature_offset_layers`, `*_temperature_offset` (e.g. `bridge_temperature_offset`) |
+| Two-pass bridges (first version) | A bridge is laid in two half-height passes: a foundation, then the final pass. A simple on/off here. *Experimental.* | Cleaner, better-supported bridges on thick layers. | `two_pass_bridge` ("Two-pass bridge"; becomes the multi-choice `two_pass_bridge_scope` in master), `bridge_anchor_length` |
+| High definition print | A checkbox that forces a quality-oriented bundle: at least 3 perimeters, first internal perimeter swapped, first/second internal perimeters and infill combined every 2 layers, scarf seam on contours. | One checkbox for a quality-oriented setup. | `high_def_print` ("High definition print") |
 
-In this branch, per-role perimeter combining is not exposed as its own option keys; the dedicated combine options of the 2.9.7 branch are not ported yet.
+**Caution with `high_def_print`.** While it is ticked it re-applies those values, so the settings it forces are overwritten whenever it runs. Untick it before tuning the individual options. In master it is replaced by a one-shot button.
+
+### Perimeter order, explained
+
+Three internal perimeters, `E` = external, `1`/`2`/`3` = first/second/third internal. Default order, and the order with the swap:
+
+```
+ default                      swap_first_int_w_ext_perimeter
+ print order: E, 1, 2, 3      print order: E, 2, 3, 1
+ (the first internal wall     (the first internal wall closes the
+  follows the outer wall)      groove behind the outer wall, last)
+```
+
+`reverse_internal_perimeters` with `reverse_internal_perimeters_at` = 2 reverses the order of the internal perimeters from depth 2, and can be combined with the swap.
+
+### Combine perimeters, explained
+
+With `first_internal_perimeter_every_layers` = 2 and `layer_height` 0.2, the first internal perimeter is printed once per two layers at double height. The external wall keeps printing every layer.
+
+```
+ every_layers = 1             every_layers = 2
+ layer 2  E 1 2 3             layer 2  E      (internal walls skipped)
+ layer 1  E 1 2 3             layer 1  E 1 2 3 (internal walls at 0.4 mm)
+ (everything 0.2 mm)
+```
+
+Combined layers change the print time of a layer. This branch has no combine-aware cooling yet, so check the fan and minimum layer time settings on short layers.
+
+## Not in this branch yet
+
+These exist in the 2.9.7 branch only, and need a per-feature port to v3:
+
+* new combine engine (per-loop matching, automatic depth, several methods) and combine-aware cooling
+* high-definition outer wall (`external_perimeter_sublayers`) and sub-pass seams
+* two-pass bridge scope and crosshatch variants
+* rotating seam and opposite-side inner seams
+* Quality preset as a one-shot button
+
+## Quick start recipes
+
+Starting points only. Tune for your printer, material and nozzle.
+
+1. **Faster walls.** Use 3 perimeters, set `first_internal_perimeter_every_layers` and `second_internal_perimeter_every_layers` to 2. The external wall stays at full resolution.
+2. **Better outer surface.** Enable `swap_first_int_w_ext_perimeter`, so the first internal perimeter is printed after the outer wall.
+3. **Cleaner bridges.** Tick `two_pass_bridge` and check the first bridge in the preview. Experimental.
+4. **Hotter bridges, cooler infill.** Enable `enable_temperature_offsets`, set `bridge_temperature_offset` to +10 and `infill_temperature_offset` to -5.
 
 ## Try it
 
